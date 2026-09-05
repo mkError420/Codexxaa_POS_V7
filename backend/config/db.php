@@ -758,6 +758,107 @@ class DB {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             ");
 
+            // Create more_services table if not exists
+            if (!$tableExists('more_services')) {
+                $pdo->exec("
+                    CREATE TABLE `more_services` (
+                        `id` INT AUTO_INCREMENT PRIMARY KEY,
+                        `title` VARCHAR(255) NOT NULL,
+                        `subtitle` VARCHAR(255) NULL,
+                        `description` TEXT NULL,
+                        `badge` VARCHAR(100) NULL,
+                        `features` JSON NULL,
+                        `icon` VARCHAR(100) NULL DEFAULT 'code',
+                        `image_url` VARCHAR(500) NULL,
+                        `button_text` VARCHAR(100) NULL DEFAULT 'Learn More',
+                        `button_link` VARCHAR(500) NULL DEFAULT '#contact',
+                        `display_order` INT NOT NULL DEFAULT 0,
+                        `status` ENUM('active', 'inactive') DEFAULT 'active',
+                        `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                        INDEX `idx_more_services_order` (`display_order`),
+                        INDEX `idx_more_services_status` (`status`)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+                ");
+
+                // Seed initial services
+                $pdo->exec("
+                    INSERT INTO `more_services` (`title`, `subtitle`, `description`, `badge`, `features`, `icon`, `button_text`, `button_link`, `display_order`, `status`) VALUES
+                    (
+                        'Custom Software & ERP Development',
+                        'Tailor-made software tailored to your specific business operations',
+                        'Bespoke enterprise ERPs, specialized inventory workflows, custom accounting modules, and API integrations built precisely for your unique operational requirements.',
+                        'Custom Built',
+                        '[\"Custom Module Development\", \"ERP & Accounting Integration\", \"Dedicated Engineering Team\", \"Scalable High-Load Architecture\"]',
+                        'code',
+                        'Inquire Now',
+                        'https://wa.me/8801572491828?text=Hello%20Codexxaa,%20I%20want%20to%20know%20more%20about%20Custom%20Software%20Development',
+                        1,
+                        'active'
+                    ),
+                    (
+                        'POS Hardware & Peripherals Setup',
+                        'End-to-end retail hardware procurement and setup',
+                        'High-speed 80mm thermal receipt printers, wireless handheld barcode scanners, heavy-duty electronic cash drawers, customer display screens, and touch monitors.',
+                        'Hardware',
+                        '[\"Tested Compatible Bundles\", \"Thermal Printers & Barcode Scanners\", \"Heavy-Duty Cash Drawers\", \"1-Year Hardware Warranty & Setup\"]',
+                        'printer',
+                        'Order Hardware',
+                        'https://wa.me/8801572491828?text=Hello%20Codexxaa,%20I%20want%20to%20order%20POS%20Hardware%20and%20Peripherals',
+                        2,
+                        'active'
+                    ),
+                    (
+                        'Cloud Migration & Automated Backup',
+                        'Zero-downtime migration to modern cloud infrastructure',
+                        'Seamlessly migrate your legacy desktop or offline POS database to our secure cloud server with real-time automated daily backups and disaster recovery.',
+                        'Popular',
+                        '[\"Zero Downtime Migration\", \"Automated Redundant Backups\", \"AES-256 Cloud Encryption\", \"Historical Data Sanitization\"]',
+                        'cloud',
+                        'Migrate Now',
+                        'https://wa.me/8801572491828?text=Hello%20Codexxaa,%20I%20want%20to%20migrate%20my%20data%20to%20Cloud',
+                        3,
+                        'active'
+                    ),
+                    (
+                        'E-commerce & Mobile App Sync',
+                        'Synchronize in-store retail stock with your online store',
+                        'Connect your physical POS sales and inventory with WooCommerce, Shopify, or custom branded iOS & Android customer mobile apps in real-time.',
+                        'Omnichannel',
+                        '[\"Real-time Stock Synchronization\", \"Unified Customer Profiles\", \"Instant Push Notifications\", \"Multi-channel Order Processing\"]',
+                        'smartphone',
+                        'Explore Sync',
+                        'https://wa.me/8801572491828?text=Hello%20Codexxaa,%20I%20am%20interested%20in%20E-commerce%20and%20Mobile%20App%20Sync',
+                        4,
+                        'active'
+                    ),
+                    (
+                        'Networking, CCTV & Security Integration',
+                        'Full retail infrastructure networking & register monitoring',
+                        'Comprehensive shop networking, ultra-low-latency local Wi-Fi / LAN setups, smart CCTV coverage over cashier desks, and anti-theft counter synchronization.',
+                        'Security',
+                        '[\"High-Speed LAN & Wi-Fi Routers\", \"Cashier CCTV Video Synchronization\", \"Anti-theft Transaction Tracking\", \"UPS & Power Redundancy Planning\"]',
+                        'shield',
+                        'Request Survey',
+                        'https://wa.me/8801572491828?text=Hello%20Codexxaa,%20I%20need%20Networking%20and%20CCTV%20Installation',
+                        5,
+                        'active'
+                    ),
+                    (
+                        '24/7 Dedicated Support & SLA',
+                        'Round-the-clock priority assistance and onsite staff training',
+                        'Premium enterprise SLA featuring direct WhatsApp engineer hotlines, on-site/remote staff onboarding, quarterly health inspections, and priority emergency response.',
+                        '24/7 SLA',
+                        '[\"Under 15-Minute Response SLA\", \"Dedicated Technical Account Manager\", \"Unlimited Staff Training Sessions\", \"Quarterly System Health Audits\"]',
+                        'headset',
+                        'Contact Support',
+                        'https://wa.me/8801572491828?text=Hello%20Codexxaa,%20I%20want%20to%20learn%20about%2024/7%20Dedicated%20Support%20SLA',
+                        6,
+                        'active'
+                    )
+                ");
+            }
+
         } catch (\PDOException $e) {
             error_log("Migration error: " . $e->getMessage());
             file_put_contents(__DIR__ . '/migration_error.txt', "Migration error: " . $e->getMessage());

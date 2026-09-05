@@ -4,12 +4,95 @@ import Footer from './Footer';
 import API_BASE_URL from '../config';
 import AnimatedButton from './AnimatedButton';
 import ElectronicCashDrawerModal from './ElectronicCashDrawerModal';
+import { SERVICE_ICONS } from './MoreServices';
+
+const DEFAULT_MORE_SERVICES = [
+  {
+    id: 1,
+    title: 'Custom Software & ERP Development',
+    subtitle: 'Tailor-made software tailored to your specific business operations',
+    description: 'Bespoke enterprise ERPs, specialized inventory workflows, custom accounting modules, and API integrations built precisely for your unique operational requirements.',
+    badge: 'Custom Built',
+    features: ['Custom Module Development', 'ERP & Accounting Integration', 'Dedicated Engineering Team', 'Scalable High-Load Architecture'],
+    icon: 'code',
+    button_text: 'Inquire Now',
+    button_link: 'https://wa.me/8801572491828?text=Hello%20Codexxaa,%20I%20want%20to%20know%20more%20about%20Custom%20Software%20Development',
+    display_order: 1,
+    status: 'active'
+  },
+  {
+    id: 2,
+    title: 'POS Hardware & Peripherals Setup',
+    subtitle: 'End-to-end retail hardware procurement and setup',
+    description: 'High-speed 80mm thermal receipt printers, wireless handheld barcode scanners, heavy-duty electronic cash drawers, customer display screens, and touch monitors.',
+    badge: 'Hardware',
+    features: ['Tested Compatible Bundles', 'Thermal Printers & Barcode Scanners', 'Heavy-Duty Cash Drawers', '1-Year Hardware Warranty & Setup'],
+    icon: 'printer',
+    button_text: 'Order Hardware',
+    button_link: 'https://wa.me/8801572491828?text=Hello%20Codexxaa,%20I%20want%20to%20order%20POS%20Hardware%20and%20Peripherals',
+    display_order: 2,
+    status: 'active'
+  },
+  {
+    id: 3,
+    title: 'Cloud Migration & Automated Backup',
+    subtitle: 'Zero-downtime migration to modern cloud infrastructure',
+    description: 'Seamlessly migrate your legacy desktop or offline POS database to our secure cloud server with real-time automated daily backups and disaster recovery.',
+    badge: 'Popular',
+    features: ['Zero Downtime Migration', 'Automated Redundant Backups', 'AES-256 Cloud Encryption', 'Historical Data Sanitization'],
+    icon: 'cloud',
+    button_text: 'Migrate Now',
+    button_link: 'https://wa.me/8801572491828?text=Hello%20Codexxaa,%20I%20want%20to%20migrate%20my%20data%20to%20Cloud',
+    display_order: 3,
+    status: 'active'
+  },
+  {
+    id: 4,
+    title: 'E-commerce & Mobile App Sync',
+    subtitle: 'Synchronize in-store retail stock with your online store',
+    description: 'Connect your physical POS sales and inventory with WooCommerce, Shopify, or custom branded iOS & Android customer mobile apps in real-time.',
+    badge: 'Omnichannel',
+    features: ['Real-time Stock Synchronization', 'Unified Customer Profiles', 'Instant Push Notifications', 'Multi-channel Order Processing'],
+    icon: 'smartphone',
+    button_text: 'Explore Sync',
+    button_link: 'https://wa.me/8801572491828?text=Hello%20Codexxaa,%20I%20am%20interested%20in%20E-commerce%20and%20Mobile%20App%20Sync',
+    display_order: 4,
+    status: 'active'
+  },
+  {
+    id: 5,
+    title: 'Networking, CCTV & Security Integration',
+    subtitle: 'Full retail infrastructure networking & register monitoring',
+    description: 'Comprehensive shop networking, ultra-low-latency local Wi-Fi / LAN setups, smart CCTV coverage over cashier desks, and anti-theft counter synchronization.',
+    badge: 'Security',
+    features: ['High-Speed LAN & Wi-Fi Routers', 'Cashier CCTV Video Synchronization', 'Anti-theft Transaction Tracking', 'UPS & Power Redundancy Planning'],
+    icon: 'shield',
+    button_text: 'Request Survey',
+    button_link: 'https://wa.me/8801572491828?text=Hello%20Codexxaa,%20I%20need%20Networking%20and%20CCTV%20Installation',
+    display_order: 5,
+    status: 'active'
+  },
+  {
+    id: 6,
+    title: '24/7 Dedicated Support & SLA',
+    subtitle: 'Round-the-clock priority assistance and onsite staff training',
+    description: 'Premium enterprise SLA featuring direct WhatsApp engineer hotlines, on-site/remote staff onboarding, quarterly health inspections, and priority emergency response.',
+    badge: '24/7 SLA',
+    features: ['Under 15-Minute Response SLA', 'Dedicated Technical Account Manager', 'Unlimited Staff Training Sessions', 'Quarterly System Health Audits'],
+    icon: 'headset',
+    button_text: 'Contact Support',
+    button_link: 'https://wa.me/8801572491828?text=Hello%20Codexxaa,%20I%20want%20to%20learn%20about%2024/7%20Dedicated%20Support%20SLA',
+    display_order: 6,
+    status: 'active'
+  }
+];
 
 export default function Home({ onNavigate, onLoginSuccess, publicPage }) {
   const [logo, setLogo] = useState(null);
   const [heroSlides, setHeroSlides] = useState([]);
   const [pricingPlans, setPricingPlans] = useState([]);
   const [videos, setVideos] = useState([]);
+  const [moreServices, setMoreServices] = useState(DEFAULT_MORE_SERVICES);
   const [currentSlide, setCurrentSlide] = useState(0);
   const [loading, setLoading] = useState(true);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -272,12 +355,13 @@ export default function Home({ onNavigate, onLoginSuccess, publicPage }) {
     let isMounted = true;
     const fetchData = async () => {
       try {
-        const [logoRes, slidesRes, pricingRes, paymentRes, videosRes] = await Promise.allSettled([
+        const [logoRes, slidesRes, pricingRes, paymentRes, videosRes, servicesRes] = await Promise.allSettled([
           fetch(`${API_BASE_URL}/public/logo`),
           fetch(`${API_BASE_URL}/public/hero-slides`),
           fetch(`${API_BASE_URL}/public/pricing-plans`),
           fetch(`${API_BASE_URL}/public/payment-numbers`),
-          fetch(`${API_BASE_URL}/public/videos`)
+          fetch(`${API_BASE_URL}/public/videos`),
+          fetch(`${API_BASE_URL}/public/more-services`)
         ]);
 
         if (!isMounted) return;
@@ -308,6 +392,13 @@ export default function Home({ onNavigate, onLoginSuccess, publicPage }) {
           const data = await videosRes.value.json().catch(() => []);
           if (Array.isArray(data) && isMounted) {
             setVideos(data.sort((a, b) => (a.display_order || 0) - (b.display_order || 0)));
+          }
+        }
+
+        if (servicesRes.status === 'fulfilled' && servicesRes.value.ok) {
+          const data = await servicesRes.value.json().catch(() => []);
+          if (Array.isArray(data) && data.length > 0 && isMounted) {
+            setMoreServices(data.sort((a, b) => (a.display_order || 0) - (b.display_order || 0)));
           }
         }
       } catch (err) {
@@ -1343,6 +1434,122 @@ export default function Home({ onNavigate, onLoginSuccess, publicPage }) {
             </div>
           </div>
         </div>
+
+        {/* Our More Services Section */}
+        {moreServices.length > 0 && (
+          <div id="more-services" className="mb-28 pt-8">
+            <div className="text-center mb-16">
+              <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-indigo-50 border border-indigo-100 text-indigo-700 text-xs font-bold uppercase tracking-wider mb-4 shadow-xs">
+                <span className="w-2 h-2 rounded-full bg-indigo-600 animate-pulse"></span>
+                Extended Solutions & Services
+              </div>
+              <h2 className="text-4xl sm:text-5xl font-extrabold text-gray-900 tracking-tight mb-4">
+                Our More <span className="bg-gradient-to-r from-indigo-600 via-indigo-700 to-purple-600 bg-clip-text text-transparent">Services</span>
+              </h2>
+              <p className="text-lg sm:text-xl text-gray-600 max-w-2xl mx-auto leading-relaxed">
+                Beyond standard point-of-sale software, we provide specialized end-to-end technology, hardware setups, and enterprise support to power your retail business.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+              {moreServices.map((service) => {
+                const serviceFeatures = Array.isArray(service.features)
+                  ? service.features
+                  : (typeof service.features === 'string'
+                      ? (JSON.parse(service.features || '[]') || [])
+                      : []);
+
+                const isExternal = (service.button_link || '').startsWith('http');
+
+                return (
+                  <div
+                    key={service.id}
+                    className="group bg-white rounded-2xl border border-gray-200/90 hover:border-indigo-300 p-8 shadow-sm hover:shadow-xl hover:shadow-indigo-500/10 transition-all duration-300 hover:-translate-y-1.5 flex flex-col justify-between relative overflow-hidden"
+                  >
+                    {/* Subtle top ambient accent line */}
+                    <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+
+                    <div>
+                      {/* Top Bar: Icon + Badge */}
+                      <div className="flex items-start justify-between gap-4 mb-6">
+                        {service.image_url ? (
+                          <img
+                            src={service.image_url.startsWith('http') ? service.image_url : `${API_BASE_URL}/${service.image_url}`}
+                            alt={service.title}
+                            className="w-14 h-14 rounded-2xl object-cover border border-slate-200 shadow-sm group-hover:scale-105 transition-transform duration-300"
+                          />
+                        ) : (
+                          <div className="w-14 h-14 rounded-2xl bg-indigo-50 border border-indigo-100 text-indigo-600 flex items-center justify-center group-hover:bg-indigo-600 group-hover:text-white transition-all duration-300 shadow-xs">
+                            {SERVICE_ICONS[service.icon] || SERVICE_ICONS.code}
+                          </div>
+                        )}
+
+                        {service.badge && (
+                          <span className="px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-indigo-50 text-indigo-700 border border-indigo-200/80 group-hover:bg-indigo-600 group-hover:text-white group-hover:border-indigo-600 transition-colors duration-200">
+                            {service.badge}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Title & Subtitle */}
+                      <h3 className="text-xl font-bold text-gray-900 group-hover:text-indigo-600 transition-colors duration-200 mb-1.5 leading-snug">
+                        {service.title}
+                      </h3>
+                      {service.subtitle && (
+                        <p className="text-xs font-semibold text-indigo-600 mb-3 tracking-wide">
+                          {service.subtitle}
+                        </p>
+                      )}
+
+                      {/* Description */}
+                      {service.description && (
+                        <p className="text-gray-600 text-sm leading-relaxed mb-6">
+                          {service.description}
+                        </p>
+                      )}
+
+                      {/* Features List */}
+                      {serviceFeatures.length > 0 && (
+                        <div className="space-y-2.5 pt-4 border-t border-gray-100 mb-8">
+                          {serviceFeatures.map((feat, fIdx) => (
+                            <div key={fIdx} className="flex items-start gap-2.5 text-xs text-gray-700 font-medium">
+                              <span className="w-4 h-4 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center flex-shrink-0 mt-0.5">
+                                <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" />
+                                </svg>
+                              </span>
+                              <span>{feat}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Action Button */}
+                    <a
+                      href={service.button_link || '#contact'}
+                      target={isExternal ? '_blank' : '_self'}
+                      rel={isExternal ? 'noopener noreferrer' : undefined}
+                      onClick={(e) => {
+                        if (!service.button_link || service.button_link === '#contact') {
+                          e.preventDefault();
+                          onNavigate('contact');
+                          window.history.pushState({}, '', '/contact');
+                        }
+                      }}
+                      className="w-full py-3 px-5 rounded-xl font-semibold text-sm text-center transition-all duration-200 flex items-center justify-center gap-2 bg-slate-900 hover:bg-indigo-600 text-white shadow-sm hover:shadow-md active:scale-98 cursor-pointer group/btn"
+                    >
+                      <span>{service.button_text || 'Learn More'}</span>
+                      <svg className="w-4 h-4 transform group-hover/btn:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                      </svg>
+                    </a>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Videos Section */}
         {videos.length > 0 && (

@@ -1582,5 +1582,316 @@ class WebsiteContentController {
             echo json_encode(['error' => 'Failed to delete subscription']);
         }
     }
+
+    // ============================================
+    // MORE SERVICES CRUD OPERATIONS
+    // ============================================
+
+    public function getAllServicesPublic() {
+        try {
+            $stmt = $this->db->query("
+                SELECT id, title, subtitle, description, badge, features, icon, image_url, button_text, button_link, display_order, status, created_at, updated_at 
+                FROM more_services 
+                WHERE status = 'active' 
+                ORDER BY display_order ASC, id ASC
+            ");
+            $services = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            // Parse features JSON for clean frontend consumption
+            foreach ($services as &$service) {
+                if (!empty($service['features'])) {
+                    $decoded = json_decode($service['features'], true);
+                    $service['features'] = is_array($decoded) ? $decoded : [];
+                } else {
+                    $service['features'] = [];
+                }
+            }
+
+            header('Content-Type: application/json');
+            echo json_encode($services);
+        } catch (\Exception $e) {
+            error_log('Get public more services error: ' . $e->getMessage());
+            http_response_code(500);
+            header('Content-Type: application/json');
+            echo json_encode(['error' => 'Failed to fetch services: ' . $e->getMessage()]);
+        }
+    }
+
+    public function getAllServices() {
+        try {
+            $stmt = $this->db->query("
+                SELECT id, title, subtitle, description, badge, features, icon, image_url, button_text, button_link, display_order, status, created_at, updated_at 
+                FROM more_services 
+                ORDER BY display_order ASC, id ASC
+            ");
+            $services = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            foreach ($services as &$service) {
+                if (!empty($service['features'])) {
+                    $decoded = json_decode($service['features'], true);
+                    $service['features'] = is_array($decoded) ? $decoded : [];
+                } else {
+                    $service['features'] = [];
+                }
+            }
+
+            header('Content-Type: application/json');
+            echo json_encode($services);
+        } catch (\Exception $e) {
+            error_log('Get all more services error: ' . $e->getMessage());
+            http_response_code(500);
+            header('Content-Type: application/json');
+            echo json_encode(['error' => 'Failed to fetch services: ' . $e->getMessage()]);
+        }
+    }
+
+    public function getServiceById($id) {
+        try {
+            $stmt = $this->db->prepare("
+                SELECT id, title, subtitle, description, badge, features, icon, image_url, button_text, button_link, display_order, status, created_at, updated_at 
+                FROM more_services 
+                WHERE id = ?
+            ");
+            $stmt->execute([$id]);
+            $service = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$service) {
+                http_response_code(404);
+                header('Content-Type: application/json');
+                echo json_encode(['error' => 'Service not found']);
+                return;
+            }
+
+            if (!empty($service['features'])) {
+                $decoded = json_decode($service['features'], true);
+                $service['features'] = is_array($decoded) ? $decoded : [];
+            } else {
+                $service['features'] = [];
+            }
+
+            header('Content-Type: application/json');
+            echo json_encode($service);
+        } catch (\Exception $e) {
+            error_log('Get service by id error: ' . $e->getMessage());
+            http_response_code(500);
+            header('Content-Type: application/json');
+            echo json_encode(['error' => 'Failed to fetch service: ' . $e->getMessage()]);
+        }
+    }
+
+    public function createService() {
+        try {
+            // Determine input source (multipart/form-data vs raw JSON)
+            $isJson = empty($_POST) && !empty(file_get_contents('php://input'));
+            $input = $isJson ? json_decode(file_get_contents('php://input'), true) : $_POST;
+
+            $title = trim($input['title'] ?? '');
+            $subtitle = trim($input['subtitle'] ?? '');
+            $description = trim($input['description'] ?? '');
+            $badge = trim($input['badge'] ?? '');
+            $icon = trim($input['icon'] ?? 'code');
+            $buttonText = trim($input['button_text'] ?? 'Learn More');
+            $buttonLink = trim($input['button_link'] ?? '#contact');
+            $displayOrder = isset($input['display_order']) ? (int)$input['display_order'] : 0;
+            $status = in_array($input['status'] ?? '', ['active', 'inactive']) ? $input['status'] : 'active';
+
+            // Parse features
+            $features = $input['features'] ?? [];
+            if (is_string($features)) {
+                $featuresDecoded = json_decode($features, true);
+                $features = is_array($featuresDecoded) ? $featuresDecoded : array_filter(array_map('trim', explode("\n", $features)));
+            }
+            $featuresJson = json_encode(array_values(array_filter($features)));
+
+            if (empty($title)) {
+                http_response_code(400);
+                header('Content-Type: application/json');
+                echo json_encode(['error' => 'Service title is required']);
+                return;
+            }
+
+            // Handle optional image upload
+            $imageUrl = null;
+            if (isset($_FILES['image']) && $_FILES['image']['error'] === UPLOAD_ERR_OK) {
+                $uploadDir = '../uploads/services/';
+                if (!is_dir($uploadDir)) {
+                    mkdir($uploadDir, 0755, true);
+                }
+                $ext = pathinfo($_FILES['image']['name'], PATHINFO_EXTENSION);
+                $fileName = 'service_' . time() . '_' . uniqid() . '.' . $ext;
+                $uploadPath = $uploadDir . $fileName;
+
+                if (move_uploaded_file($_FILES['image']['tmp_name'], $uploadPath)) {
+                    $imageUrl = 'uploads/services/' . $fileName;
+                }
+            } else if (!empty($input['image_url'])) {
+                $imageUrl = $input['image_url'];
+            }
+
+            $stmt = $this->db->prepare("
+                INSERT INTO more_services (title, subtitle, description, badge, features, icon, image_url, button_text, button_link, display_order, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ");
+            $stmt->execute([
+                $title, $subtitle, $description, $badge, $featuresJson, $icon, $imageUrl, $buttonText, $buttonLink, $displayOrder, $status
+            ]);
+
+            $id = $this->db->lastInsertId();
+
+            http_response_code(201);
+            header('Content-Type: application/json');
+            echo json_encode([
+                'success' => true,
+                'message' => 'Service created successfully',
+                'service' => [
+                    'id' => (int)$id,
+                    'title' => $title,
+                    'subtitle' => $subtitle,
+                    'description' => $description,
+                    'badge' => $badge,
+                    'features' => json_decode($featuresJson, true),
+                    'icon' => $icon,
+                    'image_url' => $imageUrl,
+                    'button_text' => $buttonText,
+                    'button_link' => $buttonLink,
+                    'display_order' => $displayOrder,
+                    'status' => $status
+                ]
+            ]);
+        } catch (\Exception $e) {
+            error_log('Create service error: ' . $e->getMessage());
+            http_response_code(500);
+            header('Content-Type: application/json');
+            echo json_encode(['error' => 'Failed to create service: ' . $e->getMessage()]);
+        }
+    }
+
+    public function updateService($id) {
+        try {
+            $stmt = $this->db->prepare("SELECT * FROM more_services WHERE id = ?");
+            $stmt->execute([$id]);
+            $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$existing) {
+                http_response_code(404);
+                header('Content-Type: application/json');
+                echo json_encode(['error' => 'Service not found']);
+                return;
+            }
+
+            $isJson = empty($_POST) && !empty(file_get_contents('php://input'));
+            $input = $isJson ? json_decode(file_get_contents('php://input'), true) : $_POST;
+
+            $title = isset($input['title']) ? trim($input['title']) : $existing['title'];
+            $subtitle = isset($input['subtitle']) ? trim($input['subtitle']) : $existing['subtitle'];
+            $description = isset($input['description']) ? trim($input['description']) : $existing['description'];
+            $badge = isset($input['badge']) ? trim($input['badge']) : $existing['badge'];
+            $icon = isset($input['icon']) ? trim($input['icon']) : $existing['icon'];
+            $buttonText = isset($input['button_text']) ? trim($input['button_text']) : $existing['button_text'];
+            $buttonLink = isset($input['button_link']) ? trim($input['button_link']) : $existing['button_link'];
+            $displayOrder = isset($input['display_order']) ? (int)$input['display_order'] : (int)$existing['display_order'];
+            $status = isset($input['status']) && in_array($input['status'], ['active', 'inactive']) ? $input['status'] : $existing['status'];
+
+            // Features handling
+            if (isset($input['features'])) {
+                $features = $input['features'];
+                if (is_string($features)) {
+                    $featuresDecoded = json_decode($features, true);
+                    $features = is_array($featuresDecoded) ? $featuresDecoded : array_filter(array_map('trim', explode("\n", $features)));
+                }
+                $featuresJson = json_encode(array_values(array_filter($features)));
+            } else {
+                $featuresJson = $existing['features'];
+            }
+
+            // Image handling
+            $imageUrl = $existing['image_url'];
+            if (isset($_FILES['image']) && $_FILES['image']['error'] === UPLOAD_ERR_OK) {
+                $uploadDir = '../uploads/services/';
+                if (!is_dir($uploadDir)) {
+                    mkdir($uploadDir, 0755, true);
+                }
+                $ext = pathinfo($_FILES['image']['name'], PATHINFO_EXTENSION);
+                $fileName = 'service_' . time() . '_' . uniqid() . '.' . $ext;
+                $uploadPath = $uploadDir . $fileName;
+
+                if (move_uploaded_file($_FILES['image']['tmp_name'], $uploadPath)) {
+                    if (!empty($existing['image_url']) && file_exists('../' . $existing['image_url'])) {
+                        @unlink('../' . $existing['image_url']);
+                    }
+                    $imageUrl = 'uploads/services/' . $fileName;
+                }
+            } else if (isset($input['remove_image']) && $input['remove_image'] == '1') {
+                if (!empty($existing['image_url']) && file_exists('../' . $existing['image_url'])) {
+                    @unlink('../' . $existing['image_url']);
+                }
+                $imageUrl = null;
+            }
+
+            $updateStmt = $this->db->prepare("
+                UPDATE more_services 
+                SET title = ?, subtitle = ?, description = ?, badge = ?, features = ?, icon = ?, image_url = ?, button_text = ?, button_link = ?, display_order = ?, status = ?
+                WHERE id = ?
+            ");
+            $updateStmt->execute([
+                $title, $subtitle, $description, $badge, $featuresJson, $icon, $imageUrl, $buttonText, $buttonLink, $displayOrder, $status, $id
+            ]);
+
+            header('Content-Type: application/json');
+            echo json_encode([
+                'success' => true,
+                'message' => 'Service updated successfully',
+                'service' => [
+                    'id' => (int)$id,
+                    'title' => $title,
+                    'subtitle' => $subtitle,
+                    'description' => $description,
+                    'badge' => $badge,
+                    'features' => json_decode($featuresJson, true),
+                    'icon' => $icon,
+                    'image_url' => $imageUrl,
+                    'button_text' => $buttonText,
+                    'button_link' => $buttonLink,
+                    'display_order' => $displayOrder,
+                    'status' => $status
+                ]
+            ]);
+        } catch (\Exception $e) {
+            error_log('Update service error: ' . $e->getMessage());
+            http_response_code(500);
+            header('Content-Type: application/json');
+            echo json_encode(['error' => 'Failed to update service: ' . $e->getMessage()]);
+        }
+    }
+
+    public function deleteService($id) {
+        try {
+            $stmt = $this->db->prepare("SELECT image_url FROM more_services WHERE id = ?");
+            $stmt->execute([$id]);
+            $service = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$service) {
+                http_response_code(404);
+                header('Content-Type: application/json');
+                echo json_encode(['error' => 'Service not found']);
+                return;
+            }
+
+            if (!empty($service['image_url']) && file_exists('../' . $service['image_url'])) {
+                @unlink('../' . $service['image_url']);
+            }
+
+            $deleteStmt = $this->db->prepare("DELETE FROM more_services WHERE id = ?");
+            $deleteStmt->execute([$id]);
+
+            header('Content-Type: application/json');
+            echo json_encode(['success' => true, 'message' => 'Service deleted successfully']);
+        } catch (\Exception $e) {
+            error_log('Delete service error: ' . $e->getMessage());
+            http_response_code(500);
+            header('Content-Type: application/json');
+            echo json_encode(['error' => 'Failed to delete service: ' . $e->getMessage()]);
+        }
+    }
 }
 

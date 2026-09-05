@@ -197,6 +197,11 @@ $routes = [
             $controller = new WebsiteContentController();
             $controller->getAllVideos();
         },
+        // Public More Services Endpoint (no authentication required)
+        '/^public\/more-services$/' => function() {
+            $controller = new WebsiteContentController();
+            $controller->getAllServicesPublic();
+        },
         // Diagnostics
         '/^diagnostic$/' => function() {
             header('Content-Type: text/plain');
@@ -460,6 +465,19 @@ $routes = [
                 $controller->getSubscriptionById($args[0]);
             });
         },
+        // More Services (authenticated)
+        '/^more-services$/' => function() {
+            AuthController::requireAuth(function() {
+                $controller = new WebsiteContentController();
+                $controller->getAllServices();
+            });
+        },
+        '/^more-services\/(\d+)$/' => function($args) {
+            AuthController::requireAuth(function() use ($args) {
+                $controller = new WebsiteContentController();
+                $controller->getServiceById($args[0]);
+            });
+        },
         // Static Uploads Serving Route
         '/^uploads\/(.+)$/' => function($args) {
             $subPath = $args[0];
@@ -639,6 +657,25 @@ $routes = [
                 $controller->createSubscription();
             });
         },
+        // More Services Management (authenticated)
+        '/^more-services$/' => function($args, $data) {
+            AuthController::requireAuth(function() {
+                $controller = new WebsiteContentController();
+                $controller->createService();
+            });
+        },
+        '/^more-services\/(\d+)$/' => function($args, $data) {
+            AuthController::requireAuth(function() use ($args) {
+                if (isset($_POST['_method']) && $_POST['_method'] === 'PUT') {
+                    $controller = new WebsiteContentController();
+                    $controller->updateService($args[0]);
+                } else {
+                    http_response_code(405);
+                    header('Content-Type: application/json');
+                    echo json_encode(['error' => 'Method not allowed']);
+                }
+            });
+        },
     ],
     'PUT' => [
         // Auth
@@ -728,6 +765,13 @@ $routes = [
         },
         // Master Supplier Products
         '/^master-supplier-products\/(\d+)$/' => function($args, $data) { MasterSupplierProductController::update($args[0], $data); },
+        // More Services
+        '/^more-services\/(\d+)$/' => function($args, $data) {
+            AuthController::requireAuth(function() use ($args) {
+                $controller = new WebsiteContentController();
+                $controller->updateService($args[0]);
+            });
+        },
     ],
     'DELETE' => [
         // Products
@@ -810,6 +854,13 @@ $routes = [
             AuthController::requireAuth(function() use ($args) {
                 $controller = new WebsiteContentController();
                 $controller->deleteSubscription($args[0]);
+            });
+        },
+        // More Services
+        '/^more-services\/(\d+)$/' => function($args) {
+            AuthController::requireAuth(function() use ($args) {
+                $controller = new WebsiteContentController();
+                $controller->deleteService($args[0]);
             });
         },
     ]

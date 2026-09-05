@@ -10,6 +10,7 @@ import ContactInformation from './components/ContactInformation';
 import ContactMessages from './components/ContactMessages';
 import PricingPlans from './components/PricingPlans';
 import SubscriptionManagement from './components/SubscriptionManagement';
+import MoreServices from './components/MoreServices';
 import DashboardLayout from './components/DashboardLayout';
 import Dashboard from './components/Dashboard';
 import Checkout from './components/Checkout';
@@ -332,6 +333,7 @@ export default function App() {
         case '/contact-information': return <ContactInformation />;
         case '/contact-messages': return <ContactMessages />;
         case '/pricing-plans': return <PricingPlans />;
+        case '/more-services': return <MoreServices />;
         case '/subscriptions': return <SubscriptionManagement />;
         case '/settings': return <Settings />;
         case '/supplier-products': return <MasterSupplierProducts />;
