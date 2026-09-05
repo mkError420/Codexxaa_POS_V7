@@ -185,6 +185,7 @@ export default function Suppliers() {
     category: '',
     cost_price: '',
     selling_price: '',
+    discount_percent: '',
     quantity_ordered: 1,
     unit: 'piece',
     low_stock_threshold: '10',
@@ -192,6 +193,66 @@ export default function Suppliers() {
     paid_amount: '',
     received_date: ''
   });
+
+  // Handle change of discount % field - calculates Cost Price from Sale Price
+  const handleDiscountPercentChange = (val) => {
+    const sp = parseFloat(poFormData.selling_price);
+    const pct = parseFloat(val);
+
+    if (val !== '' && !isNaN(pct) && !isNaN(sp) && sp > 0) {
+      const calculatedCost = Math.max(0, sp - (sp * pct / 100));
+      setPoFormData(prev => ({
+        ...prev,
+        discount_percent: val,
+        cost_price: String(parseFloat(calculatedCost.toFixed(2)))
+      }));
+    } else {
+      setPoFormData(prev => ({
+        ...prev,
+        discount_percent: val
+      }));
+    }
+  };
+
+  // Handle change of Sale Price field - updates Cost Price if % is set
+  const handleSellingPriceChange = (val) => {
+    const sp = parseFloat(val);
+    const pct = parseFloat(poFormData.discount_percent);
+
+    if (val !== '' && !isNaN(sp) && !isNaN(pct) && poFormData.discount_percent !== '') {
+      const calculatedCost = Math.max(0, sp - (sp * pct / 100));
+      setPoFormData(prev => ({
+        ...prev,
+        selling_price: val,
+        cost_price: String(parseFloat(calculatedCost.toFixed(2)))
+      }));
+    } else {
+      setPoFormData(prev => ({
+        ...prev,
+        selling_price: val
+      }));
+    }
+  };
+
+  // Handle change of Cost Price field - reverse calculates % if Sale Price is set
+  const handleCostPriceChange = (val) => {
+    const cp = parseFloat(val);
+    const sp = parseFloat(poFormData.selling_price);
+
+    if (val !== '' && !isNaN(cp) && !isNaN(sp) && sp > 0) {
+      const calculatedPct = (((sp - cp) / sp) * 100).toFixed(2);
+      setPoFormData(prev => ({
+        ...prev,
+        cost_price: val,
+        discount_percent: parseFloat(calculatedPct) !== 0 ? String(parseFloat(calculatedPct)) : '0'
+      }));
+    } else {
+      setPoFormData(prev => ({
+        ...prev,
+        cost_price: val
+      }));
+    }
+  };
 
   // PO cart for multiple products
   const [poCart, setPoCart] = useState([]);
@@ -432,6 +493,7 @@ export default function Suppliers() {
       category: '',
       cost_price: '',
       selling_price: '',
+      discount_percent: '',
       quantity_ordered: 1,
       expiry_date: '',
       unit: 'piece'
@@ -452,6 +514,14 @@ export default function Suppliers() {
     setEditingCartItemIndex(index);
     setProductSearch(item.name || '');
 
+    const sp = parseFloat(item.selling_price || 0);
+    const cp = parseFloat(item.cost_price || 0);
+    let calculatedPct = '';
+    if (sp > 0 && cp >= 0) {
+      const p = (((sp - cp) / sp) * 100).toFixed(2);
+      calculatedPct = parseFloat(p) !== 0 ? String(parseFloat(p)) : '0';
+    }
+
     setPoFormData(prev => ({
       ...prev,
       product_id: item.product_id ? String(item.product_id) : '',
@@ -461,6 +531,7 @@ export default function Suppliers() {
       category: item.category || '',
       cost_price: String(item.cost_price || ''),
       selling_price: String(item.selling_price || ''),
+      discount_percent: calculatedPct,
       quantity_ordered: item.quantity_ordered || 1,
       expiry_date: item.expiry_date || '',
       unit: item.unit || 'piece'
@@ -480,6 +551,7 @@ export default function Suppliers() {
       category: '',
       cost_price: '',
       selling_price: '',
+      discount_percent: '',
       quantity_ordered: 1,
       expiry_date: '',
       unit: 'piece'
@@ -1006,6 +1078,7 @@ export default function Suppliers() {
       category: '',
       cost_price: '',
       selling_price: '',
+      discount_percent: '',
       quantity_ordered: 1,
       expiry_date: '',
       unit: 'piece',
@@ -1034,6 +1107,7 @@ export default function Suppliers() {
         category: '',
         cost_price: '',
         selling_price: '',
+        discount_percent: '',
         expiry_date: '',
         unit: 'piece',
         low_stock_threshold: '10'
@@ -1055,6 +1129,14 @@ export default function Suppliers() {
           }
         }
 
+        const sp = parseFloat(prod.price || 0);
+        const cp = prod.cost_price !== undefined && prod.cost_price !== null ? parseFloat(prod.cost_price) : parseFloat(prev.cost_price || 0);
+        let calculatedPct = '';
+        if (sp > 0 && cp >= 0) {
+          const p = (((sp - cp) / sp) * 100).toFixed(2);
+          calculatedPct = parseFloat(p) !== 0 ? String(parseFloat(p)) : '0';
+        }
+
         setPoFormData(prev => ({
           ...prev, // Keep existing form data
           product_id: productId,
@@ -1064,6 +1146,7 @@ export default function Suppliers() {
           category: autoCategory,
           cost_price: prod.cost_price !== undefined && prod.cost_price !== null ? prod.cost_price : prev.cost_price,
           selling_price: prod.price,
+          discount_percent: calculatedPct,
           expiry_date: prod.expiry_date || '',
           unit: prod.unit || 'piece',
           low_stock_threshold: prod.low_stock_threshold || '10'
@@ -1100,6 +1183,7 @@ export default function Suppliers() {
           category: '',
           cost_price: '',
           selling_price: '',
+          discount_percent: '',
           expiry_date: '',
           unit: 'piece',
           low_stock_threshold: '10'
@@ -1139,6 +1223,7 @@ export default function Suppliers() {
         category: '',
         cost_price: '',
         selling_price: '',
+        discount_percent: '',
         quantity_ordered: 1,
         unit: 'piece',
         low_stock_threshold: '10',
@@ -6538,17 +6623,17 @@ export default function Suppliers() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Cost Price (৳) *</label>
                 <input
                   type="number"
                   step="0.01"
                   value={poFormData.cost_price}
-                  onChange={(e) => setPoFormData({ ...poFormData, cost_price: e.target.value })}
+                  onChange={(e) => handleCostPriceChange(e.target.value)}
                   required
                   placeholder="0.00"
-                  className="w-full border border-slate-200 rounded-lg p-2.5 text-sm outline-none focus:ring-1 focus:ring-indigo-500 bg-white"
+                  className="w-full border border-slate-200 rounded-lg p-2.5 text-sm outline-none focus:ring-1 focus:ring-indigo-500 bg-white font-medium"
                 />
               </div>
               <div>
@@ -6557,10 +6642,24 @@ export default function Suppliers() {
                   type="number"
                   step="0.01"
                   value={poFormData.selling_price}
-                  onChange={(e) => setPoFormData({ ...poFormData, selling_price: e.target.value })}
+                  onChange={(e) => handleSellingPriceChange(e.target.value)}
                   placeholder="0.00"
-                  className="w-full border border-slate-200 rounded-lg p-2.5 text-sm outline-none focus:ring-1 focus:ring-indigo-500 bg-white"
+                  className="w-full border border-slate-200 rounded-lg p-2.5 text-sm outline-none focus:ring-1 focus:ring-indigo-500 bg-white font-medium"
                 />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">%</label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={poFormData.discount_percent !== undefined ? poFormData.discount_percent : ''}
+                    onChange={(e) => handleDiscountPercentChange(e.target.value)}
+                    placeholder="0"
+                    className="w-full border border-slate-200 rounded-lg p-2.5 pr-7 text-sm outline-none focus:ring-1 focus:ring-indigo-500 bg-white font-medium"
+                  />
+                  <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 pointer-events-none">%</span>
+                </div>
               </div>
 
               <div>
