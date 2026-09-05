@@ -1602,23 +1602,20 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
       )}
 
       {/* 2. Page Title Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
-        <div>
-          <h2 className="text-2xl font-bold text-slate-800">POS Checkout</h2>
-          <p className="text-sm text-slate-500">Scan SKU or search item names to build a customer cart</p>
-        </div>
+      <div className="flex flex-row justify-between items-center gap-2 mb-2">
+        <h2 className="text-lg font-bold text-slate-800">POS Checkout</h2>
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => onNavigate('/manual-orders')}
-            className="relative bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold py-2.5 px-3.5 sm:px-4 border border-indigo-200 rounded-xl text-sm shadow-xs transition-colors flex items-center space-x-2"
+            className="relative bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold py-1.5 px-3 border border-indigo-200 rounded-xl text-xs shadow-xs transition-colors flex items-center space-x-1.5"
           >
             <span>Sales Orders</span>
           </button>
           <button
             type="button"
             onClick={() => setShowHeldBillsModal(true)}
-            className="relative bg-white hover:bg-slate-50 text-slate-700 font-semibold py-2.5 px-3.5 sm:px-4 border border-slate-200 rounded-xl text-sm shadow-xs transition-colors flex items-center space-x-2"
+            className="relative bg-white hover:bg-slate-50 text-slate-700 font-semibold py-1.5 px-3 border border-slate-200 rounded-xl text-xs shadow-xs transition-colors flex items-center space-x-1.5"
           >
             <span>Due Bills</span>
             {heldBills.filter(b => b.status === 'held').length > 0 && (
@@ -1632,10 +1629,10 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
           <button
             type="button"
             onClick={() => setShowCashDrawerModal(true)}
-            className="relative bg-amber-50 hover:bg-amber-100 text-amber-900 font-semibold py-2.5 px-3.5 sm:px-4 border border-amber-300 rounded-xl text-sm shadow-xs transition-all flex items-center space-x-2"
+            className="relative bg-amber-50 hover:bg-amber-100 text-amber-900 font-semibold py-1.5 px-3 border border-amber-300 rounded-xl text-xs shadow-xs transition-all flex items-center space-x-1.5"
             title="Electronic Cash Drawer (F12 / Alt+D)"
           >
-            <svg className="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-3.5 h-3.5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
             </svg>
             <span>Cash Drawer (F12)</span>
@@ -1645,9 +1642,9 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
           <button
             type="button"
             onClick={() => setMobileCartOpen(true)}
-            className="lg:hidden relative bg-slate-900 hover:bg-slate-800 text-white font-semibold py-2.5 px-3.5 sm:px-4 rounded-xl text-sm shadow-xs transition-colors flex items-center space-x-2"
+            className="lg:hidden relative bg-slate-900 hover:bg-slate-800 text-white font-semibold py-1.5 px-3 rounded-xl text-xs shadow-xs transition-colors flex items-center space-x-1.5"
           >
-            <svg className="w-5 h-5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 0a2 2 0 100 4 2 2 0 000-4z" />
             </svg>
             <span>View Cart</span>
@@ -1661,11 +1658,11 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
       </div>
 
       {/* 3. Tabs Bar */}
-      <div className="mb-4 border-b border-slate-200 flex items-center space-x-1">
+      <div className="mb-2 border-b border-slate-200 flex items-center space-x-1">
         {saleTabs.filter(tab => !tab.hidden).map(tab => (
           <div
             key={tab.id}
-            className={`flex items-center space-x-2 py-2 px-4 border-b-2 cursor-pointer transition-all duration-200 ${activeTabId === tab.id
+            className={`flex items-center space-x-2 py-1.5 px-3 border-b-2 cursor-pointer transition-all duration-200 text-xs ${activeTabId === tab.id
               ? 'border-indigo-600 text-indigo-600 font-semibold bg-indigo-50/50'
               : 'border-transparent text-slate-500 hover:bg-slate-100'
               }`}
@@ -1677,16 +1674,16 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
               className="text-slate-400 hover:text-slate-700 hover:bg-slate-200 rounded-full p-0.5"
               disabled={saleTabs.length <= 1}
             >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
             </button>
           </div>
         ))}
         <button
           onClick={addSaleTab}
-          className="ml-2 text-slate-500 hover:bg-slate-200 rounded-full p-2 transition-colors"
+          className="ml-2 text-slate-500 hover:bg-slate-200 rounded-full p-1.5 transition-colors"
           title="Add New Sale Tab"
         >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
         </button>
       </div>
       {/* 3. Split Screen Flex Layout */}
@@ -3466,7 +3463,7 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
         </div>
 
         {/* Selected products table */}
-        <div className="flex-1 overflow-y-auto p-2.5 min-h-0 max-h-[400px] scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-slate-100 hover:scrollbar-thumb-slate-400">
+        <div className="flex-1 overflow-y-auto p-2 min-h-0 scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-slate-100 hover:scrollbar-thumb-slate-400">
           {activeTab?.cart?.length === 0 ? (
             <div className="h-full flex flex-col justify-center items-center text-slate-400 py-12">
               <svg className="w-10 h-10 mb-2 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -3476,15 +3473,15 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
+              <table className="w-full text-left border-collapse table-fixed">
                 <thead>
                   <tr className="border-b border-slate-200 text-[10px] font-bold text-slate-400 uppercase bg-slate-50/50">
-                    <th className="p-2 pl-3">Item</th>
-                    <th className="p-2 text-center w-36">Qty</th>
-                    <th className="p-2 text-center w-14">Unit</th>
-                    <th className="p-2 text-right w-32">Price (৳)</th>
-                    <th className="p-2 text-right w-32">Subtotal</th>
-                    <th className="p-2 w-8"></th>
+                    <th className="p-2 pl-3 w-[30%]">Item</th>
+                    <th className="p-2 text-center w-[28%]">Qty</th>
+                    <th className="p-2 text-center w-[10%]">Unit</th>
+                    <th className="p-2 text-right w-[16%]">Price</th>
+                    <th className="p-2 text-right w-[14%]">Sub</th>
+                    <th className="p-2 w-6"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-xs">
@@ -3494,16 +3491,16 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
                       onClick={() => setSelectedCartItemId(item.id)}
                       className={`hover:bg-indigo-50/40 transition-colors cursor-pointer ${selectedCartItemId === item.id ? 'bg-indigo-50/80 font-bold border-l-4 border-indigo-600' : ''}`}
                     >
-                      <td className="p-2 pl-3 font-semibold text-slate-800 max-w-[120px] truncate" title={item.name}>
-                        <div className="truncate">{item.name}</div>
-                        <div className="text-[10px] text-slate-450 font-normal">Cost: ৳{parseFloat(item.cost_price || 0).toFixed(3)}</div>
+                      <td className="p-2 pl-3 font-semibold text-slate-800 min-w-0" title={item.name}>
+                        <div className="truncate text-xs">{item.name}</div>
+                        <div className="text-[10px] text-slate-400 font-normal truncate">৳{parseFloat(item.cost_price || 0).toFixed(2)}</div>
                       </td>
                       <td className="p-2 text-center">
-                        <div className="inline-flex items-center border border-slate-200 rounded-lg bg-white overflow-hidden">
+                        <div className="inline-flex items-center border border-slate-200 rounded-lg bg-white overflow-hidden w-full justify-center">
                           <button
                             type="button"
                             onClick={() => updateQuantity(item.id, -1)}
-                            className="px-2 py-1 hover:bg-slate-100 text-slate-600 transition-colors font-bold text-xs"
+                            className="px-1.5 py-1 hover:bg-slate-100 text-slate-600 transition-colors font-bold text-xs shrink-0"
                           >
                             -
                           </button>
@@ -3515,12 +3512,12 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
                             value={item.quantity}
                             onChange={(e) => handleQuantityInput(item.id, e.target.value)}
                             onBlur={() => handleQuantityBlur(item.id, item.quantity)}
-                            className="w-16 text-center text-xs font-bold text-slate-700 bg-transparent border-0 focus:ring-0 focus:outline-none p-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            className="w-10 text-center text-xs font-bold text-slate-700 bg-transparent border-0 focus:ring-0 focus:outline-none p-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           />
                           <button
                             type="button"
                             onClick={() => updateQuantity(item.id, 1)}
-                            className="px-2 py-1 hover:bg-slate-100 text-slate-600 transition-colors font-bold text-xs"
+                            className="px-1.5 py-1 hover:bg-slate-100 text-slate-600 transition-colors font-bold text-xs shrink-0"
                           >
                             +
                           </button>
@@ -3536,7 +3533,7 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
                           min="0"
                           value={item.price}
                           onChange={(e) => updatePrice(item.id, e.target.value)}
-                          className="w-28 border border-slate-200 rounded px-1.5 py-0.5 text-right font-extrabold text-indigo-600 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 text-xs shadow-sm"
+                          className="w-full min-w-0 border border-slate-200 rounded px-1 py-0.5 text-right font-extrabold text-indigo-600 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 text-xs shadow-sm"
                         />
                       </td>
                       <td className="p-2 text-right">
@@ -3570,7 +3567,7 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
                               e.target.blur();
                             }
                           }}
-                          className="w-28 border border-slate-200 rounded px-1.5 py-0.5 text-right font-extrabold text-slate-700 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 text-xs shadow-sm"
+                          className="w-full min-w-0 border border-slate-200 rounded px-1 py-0.5 text-right font-extrabold text-slate-700 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 text-xs shadow-sm"
                         />
                       </td>
                       <td className="p-2 text-center">
@@ -3596,44 +3593,47 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
         {/* Calculation summary + Pay trigger button */}
         <div className="p-2.5 border-t border-slate-100 bg-slate-50 space-y-2 shrink-0">
           <div className="space-y-1.5 text-xs text-slate-600">
-            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
-              <div className="flex justify-between">
+            {/* Tax, Discounts, Total in a fluid single-column layout */}
+            <div className="flex flex-col gap-1">
+              <div className="flex justify-between items-center">
                 <span className="font-bold text-sm text-slate-700">Tax ({(taxRate * 100).toString()}%):</span>
                 <span className="font-semibold">৳{getTax().toFixed(3)}</span>
               </div>
 
-              {/* Discount Manual Inputs */}
-              <div className="flex justify-between items-center">
-                <span className="font-bold text-sm text-slate-700">Discount (%):</span>
-                <input
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="0.1"
-                  value={activeTab.discountPercent || ''}
-                  placeholder="0"
-                  onChange={(e) => updateActiveTabState('discountPercent', Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
-                  disabled={parseFloat(activeTab.discountAmount || 0) > 0}
-                  className="w-18 border border-slate-200 rounded px-1 py-1 text-right font-medium text-slate-700 bg-white text-xs disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
-                />
-              </div>
+              {/* Discount Manual Inputs — side by side */}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex justify-between items-center gap-1">
+                  <span className="font-bold text-xs text-slate-700 whitespace-nowrap">Disc (%):</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.1"
+                    value={activeTab.discountPercent || ''}
+                    placeholder="0"
+                    onChange={(e) => updateActiveTabState('discountPercent', Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
+                    disabled={parseFloat(activeTab.discountAmount || 0) > 0}
+                    className="w-full border border-slate-200 rounded px-1 py-1 text-right font-medium text-slate-700 bg-white text-xs disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed min-w-0"
+                  />
+                </div>
 
-              <div className="flex justify-between items-center">
-                <span className="font-bold text-sm text-slate-700">Discount (৳):</span>
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={activeTab.discountAmount || ''}
-                  placeholder="0"
-                  onChange={(e) => updateActiveTabState('discountAmount', Math.max(0, parseFloat(e.target.value) || 0))}
-                  disabled={parseFloat(activeTab.discountPercent || 0) > 0}
-                  className="w-19 border border-slate-200 rounded px-1 py-1 text-right font-medium text-slate-700 bg-white text-xs disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
-                />
+                <div className="flex justify-between items-center gap-1">
+                  <span className="font-bold text-xs text-slate-700 whitespace-nowrap">Disc (৳):</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={activeTab.discountAmount || ''}
+                    placeholder="0"
+                    onChange={(e) => updateActiveTabState('discountAmount', Math.max(0, parseFloat(e.target.value) || 0))}
+                    disabled={parseFloat(activeTab.discountPercent || 0) > 0}
+                    className="w-full border border-slate-200 rounded px-1 py-1 text-right font-medium text-slate-700 bg-white text-xs disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed min-w-0"
+                  />
+                </div>
               </div>
 
               {/* Final Total */}
-              <div className="flex justify-between items-center col-span-2 border-t border-slate-200/60 pt-1.5 mt-0.5">
+              <div className="flex justify-between items-center border-t border-slate-200/60 pt-1.5 mt-0.5">
                 <span className="font-extrabold text-slate-800">Total:</span>
                 <span className="font-extrabold text-indigo-650 text-sm">৳{getFinalTotal().toFixed(3)}</span>
               </div>
@@ -3684,9 +3684,9 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
             )}
 
             {/* Amount Paid input & Payment Method split row */}
-            <div className="grid grid-cols-2 gap-2 border-t border-slate-200/60 pt-2">
-              <div className="flex justify-between items-center">
-                <span className="font-bold text-sm text-slate-700">Amt Paid:</span>
+            <div className="flex flex-wrap items-center gap-2 border-t border-slate-200/60 pt-2">
+              <div className="flex items-center gap-2 flex-1 min-w-0">
+                <span className="font-bold text-sm text-slate-700 whitespace-nowrap">Amt Paid:</span>
                 <input
                   type="number"
                   min="0"
@@ -3697,11 +3697,11 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
                     updateActiveTabState('isPaidTouched', true);
                   }}
                   placeholder={getFinalTotal().toFixed(3)}
-                  className="w-35 border border-slate-200 rounded px-1.5 py-1 text-right font-semibold text-xs text-slate-700 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  className="flex-1 min-w-0 border border-slate-200 rounded px-1.5 py-1 text-right font-semibold text-xs text-slate-700 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 />
               </div>
 
-              <div className="flex items-center space-x-1 justify-end">
+              <div className="flex items-center gap-1 shrink-0">
                 {['cash', 'card', 'mobile_pay'].map((method) => (
                   <button
                     key={method}
