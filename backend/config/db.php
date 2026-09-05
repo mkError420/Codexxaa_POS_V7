@@ -288,6 +288,11 @@ class DB {
                 $pdo->exec("ALTER TABLE `sale_items` ADD COLUMN `cost_price` DECIMAL(10,2) NOT NULL DEFAULT 0.00");
             }
 
+            // Check if category column exists on master_supplier_products table
+            if ($tableExists('master_supplier_products') && !$columnExists('master_supplier_products', 'category')) {
+                $pdo->exec("ALTER TABLE `master_supplier_products` ADD COLUMN `category` VARCHAR(255) NULL AFTER `product_name`");
+            }
+
             // Create supplier_returns table if not exists
             $pdo->exec("
                 CREATE TABLE IF NOT EXISTS `supplier_returns` (

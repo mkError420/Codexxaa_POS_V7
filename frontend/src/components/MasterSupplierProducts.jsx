@@ -10,6 +10,7 @@ export default function MasterSupplierProducts() {
   // Data states
   const [items, setItems] = useState([]);
   const [distinctSuppliers, setDistinctSuppliers] = useState([]);
+  const [distinctCategories, setDistinctCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -17,6 +18,7 @@ export default function MasterSupplierProducts() {
   // Filters
   const [search, setSearch] = useState('');
   const [supplierFilter, setSupplierFilter] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
 
   // Selection
   const [selected, setSelected] = useState([]);
@@ -31,7 +33,7 @@ export default function MasterSupplierProducts() {
   // Add/Edit modal
   const [showModal, setShowModal] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
-  const [form, setForm] = useState({ supplier_name: '', product_name: '' });
+  const [form, setForm] = useState({ supplier_name: '', product_name: '', category: '' });
   const [formLoading, setFormLoading] = useState(false);
   const [supplierSuggestions, setSupplierSuggestions] = useState([]);
   const [showSupSugg, setShowSupSugg] = useState(false);
@@ -54,6 +56,7 @@ export default function MasterSupplierProducts() {
       let url = `${API_BASE_URL}/master-supplier-products?page=${page}&limit=${ITEMS_PER_PAGE}`;
       if (search) url += `&search=${encodeURIComponent(search)}`;
       if (supplierFilter) url += `&supplier_name=${encodeURIComponent(supplierFilter)}`;
+      if (categoryFilter) url += `&category=${encodeURIComponent(categoryFilter)}`;
       const res = await fetch(url, { headers });
       const data = await res.json();
       if (data.data) {
@@ -67,7 +70,7 @@ export default function MasterSupplierProducts() {
       triggerAlert('error', 'Failed to load catalog.');
     }
     setLoading(false);
-  }, [page, search, supplierFilter]);
+  }, [page, search, supplierFilter, categoryFilter]);
 
   const fetchDistinctSuppliers = async () => {
     try {
@@ -77,12 +80,21 @@ export default function MasterSupplierProducts() {
     } catch (e) {}
   };
 
+  const fetchDistinctCategories = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/master-supplier-products/categories`, { headers });
+      const data = await res.json();
+      if (Array.isArray(data)) setDistinctCategories(data);
+    } catch (e) {}
+  };
+
   useEffect(() => {
     fetchItems();
   }, [fetchItems]);
 
   useEffect(() => {
     fetchDistinctSuppliers();
+    fetchDistinctCategories();
   }, []);
 
   // ------ Stats ------
@@ -103,13 +115,17 @@ export default function MasterSupplierProducts() {
   // ------ Open modal ------
   const openAdd = () => {
     setEditingItem(null);
-    setForm({ supplier_name: '', product_name: '' });
+    setForm({ supplier_name: '', product_name: '', category: '' });
     setShowModal(true);
   };
 
   const openEdit = (item) => {
     setEditingItem(item);
-    setForm({ supplier_name: item.supplier_name, product_name: item.product_name });
+    setForm({
+      supplier_name: item.supplier_name,
+      product_name: item.product_name,
+      category: item.category || ''
+    });
     setShowModal(true);
   };
 
@@ -135,6 +151,7 @@ export default function MasterSupplierProducts() {
         setShowModal(false);
         fetchItems();
         fetchDistinctSuppliers();
+        fetchDistinctCategories();
       }
     } catch (e) {
       triggerAlert('error', 'Network error.');
@@ -154,6 +171,7 @@ export default function MasterSupplierProducts() {
         setDeleteTarget(null);
         fetchItems();
         fetchDistinctSuppliers();
+        fetchDistinctCategories();
       } else {
         const d = await res.json();
         triggerAlert('error', d.error || 'Delete failed.');
@@ -167,21 +185,22 @@ export default function MasterSupplierProducts() {
   // ------ Bulk delete ------
   const handleBulkDelete = async () => {
     if (selected.length === 0) return;
-    if (!window.confirm(`Delete ${selected.length} selected product(s)?`)) return;
+    if (!window.confirm(`Delete ${selected.length} selected products?`)) return;
     try {
       const res = await fetch(`${API_BASE_URL}/master-supplier-products/bulk-delete`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ ids: selected })
       });
-      const data = await res.json();
+      const d = await res.json();
       if (res.ok) {
-        triggerAlert('success', data.message);
+        triggerAlert('success', d.message || 'Deleted successfully.');
         setSelected([]);
         fetchItems();
         fetchDistinctSuppliers();
+        fetchDistinctCategories();
       } else {
-        triggerAlert('error', data.error || 'Bulk delete failed.');
+        triggerAlert('error', d.error || 'Bulk delete failed.');
       }
     } catch (e) {
       triggerAlert('error', 'Network error.');
@@ -195,6 +214,7 @@ export default function MasterSupplierProducts() {
     const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/[^a-z_]/g, ''));
     const supIdx = headers.findIndex(h => h.includes('supplier'));
     const prodIdx = headers.findIndex(h => h.includes('product'));
+    const catIdx = headers.findIndex(h => h.includes('categor') || h === 'group');
     if (supIdx < 0 || prodIdx < 0) { setCsvErrors(['CSV headers must include "supplier_name" and "product_name"']); setCsvParsed([]); return; }
     const errors = [];
     const parsed = [];
@@ -202,8 +222,9 @@ export default function MasterSupplierProducts() {
       const cols = lines[i].split(',').map(c => c.trim().replace(/^"|"$/g, ''));
       const sup = cols[supIdx] || '';
       const prod = cols[prodIdx] || '';
+      const cat = catIdx >= 0 ? (cols[catIdx] || '') : '';
       if (!sup || !prod) { errors.push(`Row ${i + 1}: supplier_name and product_name are required.`); continue; }
-      parsed.push({ supplier_name: sup, product_name: prod });
+      parsed.push({ supplier_name: sup, product_name: prod, category: cat });
     }
     setCsvParsed(parsed);
     setCsvErrors(errors);
@@ -244,6 +265,7 @@ export default function MasterSupplierProducts() {
         setCsvErrors([]);
         fetchItems();
         fetchDistinctSuppliers();
+        fetchDistinctCategories();
       } else {
         triggerAlert('error', data.error || 'Upload failed.');
       }
@@ -260,7 +282,7 @@ export default function MasterSupplierProducts() {
 
   // ------ Download CSV template ------
   const downloadTemplate = () => {
-    const csv = 'supplier_name,product_name\nABC Supplier,Product A\nXYZ Supplier,Product B\n';
+    const csv = 'supplier_name,product_name,category\nABC Supplier,Product A,Beverages\nXYZ Supplier,Product B,Electronics\n';
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -295,7 +317,7 @@ export default function MasterSupplierProducts() {
               </span>
               Supplier Products Catalog
             </h1>
-            <p className="text-sm text-slate-500 mt-0.5">Manage master product list organized by supplier name. Shop admins can use this during purchase orders.</p>
+            <p className="text-sm text-slate-500 mt-0.5">Manage master product list organized by supplier name and category. Shop admins can use this during purchase orders.</p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             {selected.length > 0 && (
@@ -320,10 +342,11 @@ export default function MasterSupplierProducts() {
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mt-5">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-5">
           {[
             { label: 'Total Products', value: total, color: 'indigo', icon: '📦' },
             { label: 'Unique Suppliers', value: uniqueSupplierCount, color: 'emerald', icon: '🏢' },
+            { label: 'Categories', value: distinctCategories.length, color: 'purple', icon: '🏷️' },
             { label: 'Filtered Results', value: items.length, color: 'amber', icon: '🔍' },
           ].map(s => (
             <div key={s.label} className="bg-white rounded-2xl border border-slate-100 p-4 shadow-sm">
@@ -343,20 +366,28 @@ export default function MasterSupplierProducts() {
             type="text"
             value={search}
             onChange={e => { setSearch(e.target.value); setPage(1); }}
-            placeholder="Search by product name or supplier..."
+            placeholder="Search by product name, supplier, or category..."
             className="w-full pl-9 pr-3 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-slate-50"
           />
         </div>
         <select
           value={supplierFilter}
           onChange={e => { setSupplierFilter(e.target.value); setPage(1); }}
-          className="border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-slate-50 min-w-[180px]"
+          className="border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-slate-50 min-w-[170px]"
         >
           <option value="">All Suppliers</option>
           {distinctSuppliers.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
-        {(search || supplierFilter) && (
-          <button onClick={() => { setSearch(''); setSupplierFilter(''); setPage(1); }} className="px-3 py-2 text-slate-500 hover:text-rose-500 text-sm font-medium transition-colors">
+        <select
+          value={categoryFilter}
+          onChange={e => { setCategoryFilter(e.target.value); setPage(1); }}
+          className="border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-slate-50 min-w-[170px]"
+        >
+          <option value="">All Categories</option>
+          {distinctCategories.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        {(search || supplierFilter || categoryFilter) && (
+          <button onClick={() => { setSearch(''); setSupplierFilter(''); setCategoryFilter(''); setPage(1); }} className="px-3 py-2 text-slate-500 hover:text-rose-500 text-sm font-medium transition-colors">
             Clear Filters
           </button>
         )}
@@ -384,6 +415,7 @@ export default function MasterSupplierProducts() {
                 </th>
                 <th className="p-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Supplier Name</th>
                 <th className="p-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Product Name</th>
+                <th className="p-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Category</th>
                 <th className="p-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Added On</th>
                 <th className="p-4 text-center text-xs font-bold text-slate-500 uppercase tracking-wider">Actions</th>
               </tr>
@@ -400,6 +432,15 @@ export default function MasterSupplierProducts() {
                     </span>
                   </td>
                   <td className="p-4 font-semibold text-slate-800">{item.product_name}</td>
+                  <td className="p-4">
+                    {item.category ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-100 text-slate-700 rounded-lg text-xs font-medium border border-slate-200">
+                        🏷️ {item.category}
+                      </span>
+                    ) : (
+                      <span className="text-slate-300 text-xs italic">—</span>
+                    )}
+                  </td>
                   <td className="p-4 text-slate-400 text-xs">{item.created_at ? item.created_at.split('T')[0] : '-'}</td>
                   <td className="p-4 text-center">
                     <div className="flex items-center justify-center gap-2">
@@ -475,6 +516,22 @@ export default function MasterSupplierProducts() {
                   className="w-full border border-slate-200 rounded-xl p-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-white font-medium"
                 />
               </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Category (Optional)</label>
+                <input
+                  type="text"
+                  list="master-categories-datalist"
+                  value={form.category}
+                  onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
+                  placeholder="e.g. Beverages, Electronics, Snacks..."
+                  className="w-full border border-slate-200 rounded-xl p-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-white font-medium"
+                />
+                <datalist id="master-categories-datalist">
+                  {distinctCategories.map(cat => (
+                    <option key={cat} value={cat} />
+                  ))}
+                </datalist>
+              </div>
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={() => setShowModal(false)} className="flex-1 py-2.5 border border-slate-200 text-slate-600 rounded-xl text-sm font-semibold hover:bg-slate-50 transition-colors">Cancel</button>
                 <button type="submit" disabled={formLoading} className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition-colors disabled:opacity-60">
@@ -500,8 +557,8 @@ export default function MasterSupplierProducts() {
             {/* Template download */}
             <div className="mb-4 p-3.5 bg-indigo-50 rounded-xl border border-indigo-100 flex items-center justify-between">
               <div>
-                <p className="text-xs font-bold text-indigo-700 uppercase tracking-wider">Required CSV Columns</p>
-                <p className="text-xs text-indigo-600 mt-0.5 font-mono">supplier_name, product_name</p>
+                <p className="text-xs font-bold text-indigo-700 uppercase tracking-wider">Accepted CSV Columns</p>
+                <p className="text-xs text-indigo-600 mt-0.5 font-mono">supplier_name, product_name, category (optional)</p>
               </div>
               <button onClick={downloadTemplate} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg transition-colors">Download Template</button>
             </div>
@@ -534,13 +591,15 @@ export default function MasterSupplierProducts() {
                       <tr>
                         <th className="p-2 text-left font-bold text-slate-500">Supplier Name</th>
                         <th className="p-2 text-left font-bold text-slate-500">Product Name</th>
+                        <th className="p-2 text-left font-bold text-slate-500">Category</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {csvParsed.slice(0, 50).map((row, i) => (
                         <tr key={i} className="hover:bg-slate-50">
                           <td className="p-2 text-indigo-700 font-semibold">{row.supplier_name}</td>
-                          <td className="p-2 text-slate-700">{row.product_name}</td>
+                          <td className="p-2 text-slate-700 font-medium">{row.product_name}</td>
+                          <td className="p-2 text-slate-500">{row.category || '—'}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -569,6 +628,9 @@ export default function MasterSupplierProducts() {
             </div>
             <h3 className="text-lg font-bold text-slate-800 mb-1">Delete Product?</h3>
             <p className="text-sm text-slate-500 mb-1"><strong>{deleteTarget.product_name}</strong></p>
+            {deleteTarget.category && (
+              <p className="text-xs text-indigo-600 font-medium mb-1">Category: {deleteTarget.category}</p>
+            )}
             <p className="text-xs text-slate-400 mb-5">Supplier: {deleteTarget.supplier_name}</p>
             <div className="flex gap-3">
               <button onClick={() => setDeleteTarget(null)} className="flex-1 py-2.5 border border-slate-200 text-slate-600 rounded-xl text-sm font-semibold hover:bg-slate-50">Cancel</button>

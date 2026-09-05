@@ -319,6 +319,7 @@ $routes = [
         // Master Supplier Products (catalog)
         '/^master-supplier-products$/' => function() { MasterSupplierProductController::list(); },
         '/^master-supplier-products\/suppliers$/' => function() { MasterSupplierProductController::getDistinctSuppliers(); },
+        '/^master-supplier-products\/categories$/' => function() { MasterSupplierProductController::getDistinctCategories(); },
         '/^master-supplier-products\/export$/' => function() { MasterSupplierProductController::exportCsv(); },
         '/^suppliers\/purchase-orders\/export\/csv$/' => function() { SupplierController::exportPurchaseOrdersCSV(); },
         '/^suppliers\/purchase-orders\/(\d+)$/' => function($args) { SupplierController::getPurchaseOrder($args[0]); },

@@ -933,6 +933,8 @@ export default function Suppliers() {
 
   // Distinct supplier names from super admin Supplier Products Catalog
   const [masterSupplierNames, setMasterSupplierNames] = useState([]);
+  // Distinct categories from super admin Supplier Products Catalog
+  const [masterCategories, setMasterCategories] = useState([]);
 
   // Fetch all distinct supplier names from the master catalog (super admin)
   const fetchMasterSupplierNames = async () => {
@@ -948,15 +950,28 @@ export default function Suppliers() {
     }
   };
 
-  // Fetch master catalog products filtered by the current supplier name (when is_new mode)
-  const fetchMasterCatalogForSupplier = async (supplierName) => {
-    if (!supplierName || !supplierName.trim()) { setMasterCatalogProducts([]); return; }
+  // Fetch all distinct categories from the master catalog (super admin)
+  const fetchMasterCategories = async () => {
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch(
-        `${API_BASE_URL}/master-supplier-products?supplier_name=${encodeURIComponent(supplierName.trim())}`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      const res = await fetch(`${API_BASE_URL}/master-supplier-products/categories`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (Array.isArray(data)) setMasterCategories(data);
+    } catch (e) {
+      // silently fail
+    }
+  };
+
+  // Fetch master catalog products filtered by supplier name or general catalog
+  const fetchMasterCatalogForSupplier = async (supplierName) => {
+    try {
+      const token = localStorage.getItem('token');
+      const url = supplierName && supplierName.trim()
+        ? `${API_BASE_URL}/master-supplier-products?supplier_name=${encodeURIComponent(supplierName.trim())}`
+        : `${API_BASE_URL}/master-supplier-products?limit=200`;
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
       const data = await res.json();
       const list = Array.isArray(data) ? data : (data.data || []);
       setMasterCatalogProducts(list);
@@ -967,12 +982,15 @@ export default function Suppliers() {
 
   const openAddPo = (supplierId = '') => {
     const existingSupplier = suppliers.find(s => String(s.id) === String(supplierId));
-    setSupplierSearch(existingSupplier ? existingSupplier.name : '');
+    const supName = existingSupplier ? existingSupplier.name : '';
+    setSupplierSearch(supName);
     setProductSearch('');
     setShowSupplierSuggestions(false);
     setShowProductSuggestions(false);
-    // Load master catalog supplier names so they appear in the Supplier * dropdown
+    // Load master catalog supplier names & categories so they appear in dropdowns
     fetchMasterSupplierNames();
+    fetchMasterCategories();
+    fetchMasterCatalogForSupplier(supName);
     setIsEditPoMode(false);
     setPoCart([]);
     setEditingCartItemIndex(null);
@@ -1020,24 +1038,30 @@ export default function Suppliers() {
         unit: 'piece',
         low_stock_threshold: '10'
       }));
-      // Pre-fetch master catalog for the currently selected supplier
+      // Pre-fetch master catalog
       const supName = supplierSearch.trim();
-      if (supName) {
-        fetchMasterCatalogForSupplier(supName);
-      } else {
-        setMasterCatalogProducts([]);
-      }
+      fetchMasterCatalogForSupplier(supName);
       setShowMasterProductSuggestions(true);
     } else {
       const prod = productsList.find(p => String(p.id) === String(productId));
       if (prod) {
+        let autoCategory = prod.category || '';
+        if (!autoCategory && prod.name) {
+          const matchedMaster = masterCatalogProducts.find(
+            mp => mp.product_name && mp.product_name.trim().toLowerCase() === prod.name.trim().toLowerCase()
+          );
+          if (matchedMaster && matchedMaster.category) {
+            autoCategory = matchedMaster.category;
+          }
+        }
+
         setPoFormData(prev => ({
           ...prev, // Keep existing form data
           product_id: productId,
           is_new: false,
           name: prod.name,
           sku: prod.sku,
-          category: prod.category || '',
+          category: autoCategory,
           cost_price: prod.cost_price !== undefined && prod.cost_price !== null ? prod.cost_price : prev.cost_price,
           selling_price: prod.price,
           expiry_date: prod.expiry_date || '',
@@ -6377,19 +6401,37 @@ export default function Suppliers() {
                       value={poFormData.name}
                       onChange={(e) => {
                         const val = e.target.value;
-                        setPoFormData({ ...poFormData, name: val });
                         setMasterProductNameInput(val);
                         setShowMasterProductSuggestions(val.trim().length >= 0);
+
+                        // Check if typed name matches a product in master catalog and auto-fill category
+                        const match = masterCatalogProducts.find(
+                          mp => mp.product_name && mp.product_name.trim().toLowerCase() === val.trim().toLowerCase()
+                        );
+                        setPoFormData(prev => ({
+                          ...prev,
+                          name: val,
+                          category: (match && match.category) ? match.category : prev.category
+                        }));
                       }}
                       onFocus={() => {
                         setShowMasterProductSuggestions(true);
                         // Fetch master catalog if supplier is selected
                         const supName = supplierSearch.trim();
-                        if (supName && masterCatalogProducts.length === 0) {
-                          fetchMasterCatalogForSupplier(supName);
+                        fetchMasterCatalogForSupplier(supName);
+                      }}
+                      onBlur={() => {
+                        setTimeout(() => setShowMasterProductSuggestions(false), 220);
+                        const currentName = (poFormData.name || '').trim().toLowerCase();
+                        if (currentName) {
+                          const match = masterCatalogProducts.find(
+                            mp => mp.product_name && mp.product_name.trim().toLowerCase() === currentName
+                          );
+                          if (match && match.category && !poFormData.category) {
+                            setPoFormData(prev => ({ ...prev, category: match.category }));
+                          }
                         }
                       }}
-                      onBlur={() => setTimeout(() => setShowMasterProductSuggestions(false), 220)}
                       required
                       placeholder="Type product name or pick from catalog..."
                       className="w-full border border-slate-200 rounded-lg p-2.5 text-sm outline-none focus:ring-1 focus:ring-indigo-500 bg-white font-semibold"
@@ -6403,20 +6445,41 @@ export default function Suppliers() {
                       if (filteredMaster.length === 0) return null;
                       return (
                         <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-indigo-200 rounded-lg shadow-xl z-50 max-h-52 overflow-y-auto divide-y divide-slate-100">
-                          <div className="px-3 py-1.5 bg-indigo-50 border-b border-indigo-100">
-                            <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-wider">📦 Supplier Catalog Suggestions</span>
+                          <div className="px-3 py-1.5 bg-indigo-50 border-b border-indigo-100 flex items-center justify-between">
+                            <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-wider">📦 Superadmin Catalog Suggestions</span>
+                            <span className="text-[10px] text-indigo-500 font-medium">Click to auto-fill</span>
                           </div>
                           {filteredMaster.map((p) => (
                             <div
                               key={p.id}
                               onMouseDown={(e) => {
                                 e.preventDefault();
-                                setPoFormData(prev => ({ ...prev, name: p.product_name }));
+                                setPoFormData(prev => ({
+                                  ...prev,
+                                  name: p.product_name,
+                                  category: p.category || prev.category || ''
+                                }));
+                                // If supplier is not set yet, auto set it from catalog
+                                if (!supplierSearch.trim() && p.supplier_name) {
+                                  setSupplierSearch(p.supplier_name);
+                                  createOrGetSupplier(p.supplier_name).then(created => {
+                                    if (created) {
+                                      setPoFormData(prev => ({ ...prev, supplier_id: String(created.id) }));
+                                    }
+                                  });
+                                }
                                 setShowMasterProductSuggestions(false);
                               }}
                               className="px-3 py-2 hover:bg-indigo-50 cursor-pointer transition-colors"
                             >
-                              <div className="text-xs font-semibold text-slate-800">{p.product_name}</div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-semibold text-slate-800">{p.product_name}</span>
+                                {p.category && (
+                                  <span className="text-[10px] bg-indigo-50 text-indigo-700 font-semibold px-1.5 py-0.5 rounded border border-indigo-100">
+                                    🏷️ {p.category}
+                                  </span>
+                                )}
+                              </div>
                               <div className="text-[10px] text-indigo-500 font-medium mt-0.5">🏢 {p.supplier_name}</div>
                             </div>
                           ))}
@@ -6447,7 +6510,14 @@ export default function Suppliers() {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Category</label>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  Category
+                  {poFormData.category && (
+                    <span className="ml-2 text-[10px] font-normal text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">
+                      ✓ Auto-filled
+                    </span>
+                  )}
+                </label>
                 <input
                   list="po-categories-list"
                   type="text"
@@ -6457,7 +6527,11 @@ export default function Suppliers() {
                   className="w-full border border-slate-200 rounded-lg p-2.5 text-sm outline-none focus:ring-1 focus:ring-indigo-500 bg-white font-semibold"
                 />
                 <datalist id="po-categories-list">
-                  {Array.from(new Set(productsList.map(p => p.category).filter(Boolean))).map(cat => (
+                  {Array.from(new Set([
+                    ...productsList.map(p => p.category),
+                    ...masterCatalogProducts.map(p => p.category),
+                    ...masterCategories
+                  ].filter(Boolean))).map(cat => (
                     <option key={cat} value={cat} />
                   ))}
                 </datalist>
