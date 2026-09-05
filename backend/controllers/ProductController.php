@@ -20,6 +20,7 @@ class ProductController {
         $supplierIdParam = $_GET['supplier_id'] ?? null;
         $categoryParam = $_GET['category'] ?? null;
         $purchasedOnly = ($_GET['purchased_only'] ?? null) === 'true';
+        $excludeExpired = ($_GET['exclude_expired'] ?? null) === 'true';
         $batchLevel = ($_GET['batch_level'] ?? null) === 'true';
         $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : null;
         $offset = isset($_GET['offset']) ? (int)$_GET['offset'] : 0;
@@ -90,6 +91,10 @@ class ProductController {
                 if (!empty($categoryParam)) {
                     $sql .= " AND p.category = ?";
                     $params[] = $categoryParam;
+                }
+
+                if ($excludeExpired) {
+                    $sql .= " AND (CASE WHEN ib.id IS NOT NULL THEN (ib.expiry_date IS NULL OR ib.expiry_date = '' OR ib.expiry_date >= CURRENT_DATE()) ELSE (p.expiry_date IS NULL OR p.expiry_date = '' OR p.expiry_date >= CURRENT_DATE()) END)";
                 }
 
                 $alertConditions = [];
@@ -183,6 +188,10 @@ class ProductController {
                 if (!empty($categoryParam)) {
                     $sql .= " AND p.category = ?";
                     $params[] = $categoryParam;
+                }
+
+                if ($excludeExpired) {
+                    $sql .= " AND (p.expiry_date IS NULL OR p.expiry_date = '' OR p.expiry_date >= CURRENT_DATE())";
                 }
 
                 $alertConditions = [];

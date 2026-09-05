@@ -131,8 +131,8 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
     try {
       const token = localStorage.getItem('token');
       const url = searchTerm
-        ? `${API_BASE_URL}/products?purchased_only=true&search=${encodeURIComponent(searchTerm)}`
-        : `${API_BASE_URL}/products?purchased_only=true&latest=10`;
+        ? `${API_BASE_URL}/products?purchased_only=true&exclude_expired=true&search=${encodeURIComponent(searchTerm)}`
+        : `${API_BASE_URL}/products?purchased_only=true&exclude_expired=true&latest=10`;
 
       const response = await fetch(url, {
         headers: {
@@ -153,17 +153,13 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
       const today = new Date();
       today.setHours(0, 0, 0, 0);
 
-      // Filter out products that are expired AND have 0 stock (returned to company / discarded)
+      // Filter out products that are expired (do not show expired products in POS checkout product list)
       const validProducts = data.filter(p => {
-        const stock = parseFloat(p.stock_quantity || 0);
-        let isExpired = false;
         if (p.expiry_date) {
           const exp = new Date(p.expiry_date);
           exp.setHours(0, 0, 0, 0);
-          isExpired = exp.getTime() < today.getTime();
+          if (exp.getTime() < today.getTime()) return false;
         }
-        // If expired and 0 stock (returned to company), do not show in POS checkout
-        if (isExpired && stock <= 0) return false;
         return true;
       });
 
@@ -415,7 +411,19 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
       const exactMatch = data.find(p => p.sku.toLowerCase() === trimmedBarcode.toLowerCase());
 
       if (exactMatch) {
-        if (exactMatch.stock_quantity <= 0) {
+        let isExpired = false;
+        if (exactMatch.expiry_date) {
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          const exp = new Date(exactMatch.expiry_date);
+          exp.setHours(0, 0, 0, 0);
+          isExpired = exp.getTime() < today.getTime();
+        }
+
+        if (isExpired) {
+          playBeepSound(false);
+          triggerAlert('error', `Product "${exactMatch.name}" has expired on ${exactMatch.expiry_date}. Cannot be sold.`);
+        } else if (exactMatch.stock_quantity <= 0) {
           playBeepSound(false);
           triggerAlert('error', `Product "${exactMatch.name}" is out of stock.`);
         } else {
@@ -1682,10 +1690,10 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
         </button>
       </div>
       {/* 3. Split Screen Flex Layout */}
-      <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 overflow-hidden min-h-0">
+      <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 overflow-hidden min-h-0">
 
         {/* Left Side: Product Grid (2 columns on Desktop) */}
-        <div className="lg:col-span-4 flex flex-col overflow-hidden">
+        <div className="lg:col-span-5 flex flex-col overflow-hidden">
           {/* Search & Barcode Scan Console */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
             {/* Search Input */}
@@ -1803,7 +1811,18 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
                     </thead>
                     <tbody ref={productTableBodyRef} className="divide-y divide-slate-100 text-sm">
                       {(() => {
-                        const sortedProducts = [...products].sort((a, b) => {
+                        const filteredProducts = products.filter(p => {
+                          if (p.expiry_date) {
+                            const today = new Date();
+                            today.setHours(0, 0, 0, 0);
+                            const exp = new Date(p.expiry_date);
+                            exp.setHours(0, 0, 0, 0);
+                            if (exp.getTime() < today.getTime()) return false;
+                          }
+                          return true;
+                        });
+
+                        const sortedProducts = [...filteredProducts].sort((a, b) => {
                           const aOut = parseFloat(a.stock_quantity || 0) <= 0 ? 1 : 0;
                           const bOut = parseFloat(b.stock_quantity || 0) <= 0 ? 1 : 0;
                           // First: in-stock items come before out-of-stock
@@ -1928,7 +1947,7 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
         </div>
 
         {/* Right Side / Cart Side Panel (Always visible on Desktop) */}
-        <div className={`hidden lg:flex lg:col-span-8 bg-white border border-slate-200 rounded-2xl flex-col overflow-hidden shadow-sm`}>
+        <div className={`hidden lg:flex lg:col-span-7 bg-white border border-slate-200 rounded-2xl flex-col overflow-hidden shadow-sm`}>
           {renderCartPanelContent()}
         </div>
 
