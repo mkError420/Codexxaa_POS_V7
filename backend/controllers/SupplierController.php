@@ -480,6 +480,7 @@ class SupplierController {
             $name = $item['name'] ?? '';
             $sku = $item['sku'] ?? '';
             $unit = $item['unit'] ?? 'piece';
+            $unitSize = !empty($item['unit_size']) ? trim($item['unit_size']) : null;
             $lowStock = $item['low_stock_threshold'] ?? 10;
             $category = $item['category'] ?? null;
             $expiryDate = !empty($item['expiry_date']) ? $item['expiry_date'] : null;
@@ -493,6 +494,7 @@ class SupplierController {
                 'name' => $name,
                 'sku' => $sku,
                 'unit' => $unit,
+                'unit_size' => $unitSize,
                 'low_stock_threshold' => $lowStock,
                 'category' => $category,
                 'expiry_date' => $expiryDate
@@ -521,6 +523,8 @@ class SupplierController {
         $hasSellingPrice = $columnExists('purchase_order_items', 'selling_price');
         $hasQtyReceived = $columnExists('purchase_order_items', 'quantity_received');
         $hasExpiryDate = $columnExists('purchase_order_items', 'expiry_date');
+        $hasPoiUnitSize = $columnExists('purchase_order_items', 'unit_size');
+        $hasProdUnitSize = $columnExists('products', 'unit_size');
 
         foreach ($normalizedItems as $item) {
             $productId = $item['product_id'];
@@ -578,6 +582,10 @@ class SupplierController {
                     $updateFields[] = 'category = COALESCE(?, category)';
                     $updateParams[] = $item['category'];
                 }
+                if (!empty($item['unit_size']) && $hasProdUnitSize) {
+                    $updateFields[] = 'unit_size = COALESCE(?, unit_size)';
+                    $updateParams[] = $item['unit_size'];
+                }
                 if (!empty($resolvedExpiry)) {
                     $updateFields[] = 'expiry_date = COALESCE(?, expiry_date)';
                     $updateParams[] = $resolvedExpiry;
@@ -609,22 +617,42 @@ class SupplierController {
                 $sellingPriceVal = ($item['selling_price'] > 0) ? $item['selling_price'] : $item['cost_price'];
                 $categoryVal = !empty($item['category']) ? $item['category'] : null;
 
-                DB::query(
-                    'INSERT INTO products (shop_id, name, sku, price, cost_price, stock_quantity, low_stock_threshold, expiry_date, supplier_id, unit, category)
-                     VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)',
-                    [
-                        $shopId,
-                        $item['name'],
-                        $sku,
-                        $sellingPriceVal,
-                        $item['cost_price'],
-                        (int)$item['low_stock_threshold'],
-                        $resolvedExpiry,
-                        $supplierId,
-                        $item['unit'],
-                        $categoryVal
-                    ]
-                );
+                if ($hasProdUnitSize) {
+                    DB::query(
+                        'INSERT INTO products (shop_id, name, sku, price, cost_price, stock_quantity, low_stock_threshold, expiry_date, supplier_id, unit, category, unit_size)
+                         VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)',
+                        [
+                            $shopId,
+                            $item['name'],
+                            $sku,
+                            $sellingPriceVal,
+                            $item['cost_price'],
+                            (int)$item['low_stock_threshold'],
+                            $resolvedExpiry,
+                            $supplierId,
+                            $item['unit'],
+                            $categoryVal,
+                            !empty($item['unit_size']) ? $item['unit_size'] : null
+                        ]
+                    );
+                } else {
+                    DB::query(
+                        'INSERT INTO products (shop_id, name, sku, price, cost_price, stock_quantity, low_stock_threshold, expiry_date, supplier_id, unit, category)
+                         VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)',
+                        [
+                            $shopId,
+                            $item['name'],
+                            $sku,
+                            $sellingPriceVal,
+                            $item['cost_price'],
+                            (int)$item['low_stock_threshold'],
+                            $resolvedExpiry,
+                            $supplierId,
+                            $item['unit'],
+                            $categoryVal
+                        ]
+                    );
+                }
                 $productId = (int)DB::lastInsertId();
             }
 
@@ -648,6 +676,10 @@ class SupplierController {
             if ($hasExpiryDate) {
                 $poItemCols[] = 'expiry_date';
                 $poItemParams[] = $resolvedExpiry;
+            }
+            if ($hasPoiUnitSize && !empty($item['unit_size'])) {
+                $poItemCols[] = 'unit_size';
+                $poItemParams[] = $item['unit_size'];
             }
 
             $placeholders = implode(', ', array_fill(0, count($poItemCols), '?'));
@@ -812,16 +844,27 @@ class SupplierController {
             };
             
             $hasShopId = $columnExists('purchase_order_items', 'shop_id');
+            $hasPoiUnitSize = $columnExists('purchase_order_items', 'unit_size');
+            $hasProdUnitSize = $columnExists('products', 'unit_size');
+            
+            $unitSizeSelect = '';
+            if ($hasPoiUnitSize && $hasProdUnitSize) {
+                $unitSizeSelect = ', COALESCE(poi.unit_size, p.unit_size, "") AS unit_size';
+            } elseif ($hasPoiUnitSize) {
+                $unitSizeSelect = ', poi.unit_size AS unit_size';
+            } elseif ($hasProdUnitSize) {
+                $unitSizeSelect = ', p.unit_size AS unit_size';
+            }
             
             // Fetch PO items
             if ($hasShopId) {
-                $sql = 'SELECT poi.*, p.name AS product_name, p.sku AS product_sku, p.category AS product_category, p.unit AS product_unit 
+                $sql = 'SELECT poi.*, p.name AS product_name, p.sku AS product_sku, p.category AS product_category, p.unit AS product_unit ' . $unitSizeSelect . '
                         FROM purchase_order_items poi 
                         JOIN products p ON poi.product_id = p.id 
                         WHERE poi.purchase_order_id = ? AND poi.shop_id = ?';
                 $params = [$poId, $shopId];
             } else {
-                $sql = 'SELECT poi.*, p.name AS product_name, p.sku AS product_sku, p.category AS product_category, p.unit AS product_unit 
+                $sql = 'SELECT poi.*, p.name AS product_name, p.sku AS product_sku, p.category AS product_category, p.unit AS product_unit ' . $unitSizeSelect . '
                         FROM purchase_order_items poi 
                         JOIN products p ON poi.product_id = p.id 
                         WHERE poi.purchase_order_id = ?';

@@ -792,10 +792,18 @@ export default function ComputerVisionModal({
                           <span className="font-mono text-slate-300">{topMatch.product.sku || 'N/A'}</span>
                         </div>
                         <div>
-                          <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">Stock Status:</span>
-                          <span className={`font-semibold ${(topMatch.product.stock_quantity || 0) > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                            {(topMatch.product.stock_quantity || 0) > 0 ? `${topMatch.product.stock_quantity} available` : 'Out of stock'}
+                          <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">
+                            {(topMatch.product.unit || topMatch.product.unit_size) ? 'Unit & Pack Size:' : 'Stock Status:'}
                           </span>
+                          {(topMatch.product.unit || topMatch.product.unit_size) ? (
+                            <span className="font-semibold text-emerald-300">
+                              {topMatch.product.unit || ''}{topMatch.product.unit && topMatch.product.unit_size ? ' • ' : ''}{topMatch.product.unit_size || ''}
+                            </span>
+                          ) : (
+                            <span className={`font-semibold ${(topMatch.product.stock_quantity || 0) > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {(topMatch.product.stock_quantity || 0) > 0 ? `${topMatch.product.stock_quantity} available` : 'Out of stock'}
+                            </span>
+                          )}
                         </div>
                         {topMatch.product.expiry_date && (
                           <div className="col-span-2 flex items-center justify-between border-t border-slate-800/80 pt-1 text-[10px]">
@@ -875,6 +883,7 @@ export default function ComputerVisionModal({
                               <p className="text-xs font-bold text-white truncate">{cand.product.name}</p>
                               <span className="text-[10px] text-slate-400">
                                 {cand.product.supplier_name ? `${cand.product.supplier_name} • ` : ''}
+                                {(cand.product.unit || cand.product.unit_size) ? `${cand.product.unit || ''} ${cand.product.unit_size ? `(${cand.product.unit_size})` : ''} • ` : ''}
                                 {currency}{parseFloat(cand.product.price || 0).toFixed(2)} • {cand.confidence}%
                               </span>
                             </div>

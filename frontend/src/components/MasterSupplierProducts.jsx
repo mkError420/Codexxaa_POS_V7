@@ -35,7 +35,14 @@ export default function MasterSupplierProducts() {
   // Add/Edit modal
   const [showModal, setShowModal] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
-  const [form, setForm] = useState({ supplier_name: '', product_name: '', category: '' });
+  const [form, setForm] = useState({
+    supplier_name: '',
+    product_name: '',
+    category: '',
+    unit: '',
+    unit_size: '',
+    price: ''
+  });
   const [formLoading, setFormLoading] = useState(false);
   const [supplierSuggestions, setSupplierSuggestions] = useState([]);
   const [showSupSugg, setShowSupSugg] = useState(false);
@@ -121,7 +128,14 @@ export default function MasterSupplierProducts() {
   // ------ Open modal ------
   const openAdd = () => {
     setEditingItem(null);
-    setForm({ supplier_name: '', product_name: '', category: '' });
+    setForm({
+      supplier_name: '',
+      product_name: '',
+      category: '',
+      unit: '',
+      unit_size: '',
+      price: ''
+    });
     setShowModal(true);
   };
 
@@ -130,7 +144,10 @@ export default function MasterSupplierProducts() {
     setForm({
       supplier_name: item.supplier_name,
       product_name: item.product_name,
-      category: item.category || ''
+      category: item.category || '',
+      unit: item.unit || '',
+      unit_size: item.unit_size || '',
+      price: item.price !== null && item.price !== undefined ? item.price : ''
     });
     setShowModal(true);
   };
@@ -260,25 +277,101 @@ export default function MasterSupplierProducts() {
     setBulkDeleting(false);
   };
 
+  // Helper to parse a CSV line properly with quoted values
+  const parseCsvLine = (line) => {
+    const result = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (char === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (char === ',' && !inQuotes) {
+        result.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    result.push(current.trim());
+    return result;
+  };
+
   // ------ CSV parse & upload ------
+  // New format: product_name, category(optional), supplier_name, unit(Optional), unit_size, price
   const parseCsv = (text) => {
-    const lines = text.trim().split(/\r?\n/);
-    if (lines.length < 2) { setCsvParsed([]); setCsvErrors(['CSV must have a header row and at least one data row.']); return; }
-    const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/[^a-z_]/g, ''));
-    const supIdx = headers.findIndex(h => h.includes('supplier'));
-    const prodIdx = headers.findIndex(h => h.includes('product'));
-    const catIdx = headers.findIndex(h => h.includes('categor') || h === 'group');
-    if (supIdx < 0 || prodIdx < 0) { setCsvErrors(['CSV headers must include "supplier_name" and "product_name"']); setCsvParsed([]); return; }
+    const lines = text.trim().split(/\r?\n/).filter(l => l.trim() !== '');
+    if (lines.length < 2) {
+      setCsvParsed([]);
+      setCsvErrors(['CSV must have a header row and at least one data row.']);
+      return;
+    }
+
+    const rawHeaders = parseCsvLine(lines[0]);
+    const headers = rawHeaders.map(h => h.trim().toLowerCase().replace(/[^a-z0-9_]/g, ''));
+
+    // Match column indexes by keyword
+    let prodIdx = headers.findIndex(h => h.includes('product') || h === 'item' || h === 'item_name' || h === 'name');
+    let catIdx = headers.findIndex(h => h.includes('categor') || h === 'group');
+    let supIdx = headers.findIndex(h => h.includes('supplier') || h === 'company' || h === 'vendor');
+    let unitSizeIdx = headers.findIndex(h => (h.includes('unit') && h.includes('size')) || h.includes('pack_size') || h.includes('packsize') || h === 'size' || h === 'unit_size' || h === 'unitsize');
+    let unitIdx = headers.findIndex((h, idx) => idx !== unitSizeIdx && (h.includes('unit') || h === 'uom'));
+    let priceIdx = headers.findIndex(h => h.includes('price') || h.includes('cost') || h.includes('rate') || h.includes('mrp'));
+
+    // Fallback: If named headers weren't found by keyword, check if the first row conforms to the requested 6-column format:
+    // 0: product_name, 1: category, 2: supplier_name, 3: unit, 4: unit_size, 5: price
+    if (prodIdx === -1 && supIdx === -1) {
+      if (rawHeaders.length >= 3) {
+        prodIdx = 0;
+        catIdx = 1;
+        supIdx = 2;
+        unitIdx = rawHeaders.length > 3 ? 3 : -1;
+        unitSizeIdx = rawHeaders.length > 4 ? 4 : -1;
+        priceIdx = rawHeaders.length > 5 ? 5 : -1;
+      }
+    }
+
+    if (prodIdx < 0 || supIdx < 0) {
+      setCsvErrors(['CSV headers must include "product_name" and "supplier_name" (Format: product_name, category, supplier_name, unit, unit_size, price)']);
+      setCsvParsed([]);
+      return;
+    }
+
     const errors = [];
     const parsed = [];
     for (let i = 1; i < lines.length; i++) {
-      const cols = lines[i].split(',').map(c => c.trim().replace(/^"|"$/g, ''));
-      const sup = cols[supIdx] || '';
-      const prod = cols[prodIdx] || '';
-      const cat = catIdx >= 0 ? (cols[catIdx] || '') : '';
-      if (!sup || !prod) { errors.push(`Row ${i + 1}: supplier_name and product_name are required.`); continue; }
-      parsed.push({ supplier_name: sup, product_name: prod, category: cat });
+      const line = lines[i].trim();
+      if (!line) continue;
+      const cols = parseCsvLine(line).map(c => c.replace(/^"|"$/g, '').trim());
+
+      const prod = prodIdx >= 0 && cols[prodIdx] !== undefined ? cols[prodIdx] : '';
+      const cat = catIdx >= 0 && cols[catIdx] !== undefined ? cols[catIdx] : '';
+      const sup = supIdx >= 0 && cols[supIdx] !== undefined ? cols[supIdx] : '';
+      const unit = unitIdx >= 0 && cols[unitIdx] !== undefined ? cols[unitIdx] : '';
+      const unitSize = unitSizeIdx >= 0 && cols[unitSizeIdx] !== undefined ? cols[unitSizeIdx] : '';
+      const rawPrice = priceIdx >= 0 && cols[priceIdx] !== undefined ? cols[priceIdx].replace(/[^0-9.]/g, '') : '';
+      const price = rawPrice && !isNaN(rawPrice) ? parseFloat(rawPrice) : 0;
+
+      if (!prod || !sup) {
+        errors.push(`Row ${i + 1}: product_name and supplier_name are required.`);
+        continue;
+      }
+
+      parsed.push({
+        product_name: prod,
+        category: cat,
+        supplier_name: sup,
+        unit: unit,
+        unit_size: unitSize,
+        price: price
+      });
     }
+
     setCsvParsed(parsed);
     setCsvErrors(errors);
   };
@@ -335,8 +428,13 @@ export default function MasterSupplierProducts() {
 
   // ------ Download CSV template ------
   const downloadTemplate = () => {
-    const csv = 'supplier_name,product_name,category\nABC Supplier,Product A,Beverages\nXYZ Supplier,Product B,Electronics\n';
-    const blob = new Blob([csv], { type: 'text/csv' });
+    const csv = 'product_name,category,supplier_name,unit,unit_size,price\n' +
+      'Lifil-A 50000 Capsule,Capsule,The ACME Laboratories Ltd.,Strip,10x10,237.60\n' +
+      'Fast 500mg Tablet,Tablet,The ACME Laboratories Ltd.,Box,10x10,35.00\n' +
+      'Ace Plus Tablet,Tablet,Square Pharmaceuticals PLC,Strip,10s,50.00\n' +
+      'Napa 500mg Tablet,Tablet,Beximco Pharmaceuticals Ltd.,Box,500 pcs,35.00\n' +
+      'Seclo 20mg Capsule,Capsule,Square Pharmaceuticals PLC,Box,14x10,70.00\n';
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -502,7 +600,7 @@ export default function MasterSupplierProducts() {
               {/* Select-all-pages banner */}
               {isCurrentPageFullySelected && totalPages > 1 && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-2.5 bg-indigo-50 border-b border-indigo-100">
+                  <td colSpan={8} className="px-4 py-2.5 bg-indigo-50 border-b border-indigo-100">
                     <div className="flex items-center justify-between gap-3 text-sm">
                       {selectAllPages ? (
                         <span className="text-indigo-700 font-semibold">
@@ -537,9 +635,11 @@ export default function MasterSupplierProducts() {
                 <th className="p-4 text-left w-10">
                   <input type="checkbox" checked={isCurrentPageFullySelected} onChange={toggleSelectAll} className="rounded w-4 h-4 accent-indigo-600" />
                 </th>
-                <th className="p-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Supplier Name</th>
                 <th className="p-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Product Name</th>
                 <th className="p-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Category</th>
+                <th className="p-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Supplier Name</th>
+                <th className="p-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Unit & Size</th>
+                <th className="p-4 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">Price</th>
                 <th className="p-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Added On</th>
                 <th className="p-4 text-center text-xs font-bold text-slate-500 uppercase tracking-wider">Actions</th>
               </tr>
@@ -550,11 +650,6 @@ export default function MasterSupplierProducts() {
                   <td className="p-4">
                     <input type="checkbox" checked={selected.includes(Number(item.id))} onChange={() => toggleSelect(item.id)} className="rounded w-4 h-4 accent-indigo-600" />
                   </td>
-                  <td className="p-4">
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-semibold border border-indigo-100">
-                      🏢 {item.supplier_name}
-                    </span>
-                  </td>
                   <td className="p-4 font-semibold text-slate-800">{item.product_name}</td>
                   <td className="p-4">
                     {item.category ? (
@@ -563,6 +658,27 @@ export default function MasterSupplierProducts() {
                       </span>
                     ) : (
                       <span className="text-slate-300 text-xs italic">—</span>
+                    )}
+                  </td>
+                  <td className="p-4">
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-semibold border border-indigo-100">
+                      🏢 {item.supplier_name}
+                    </span>
+                  </td>
+                  <td className="p-4">
+                    {(item.unit || item.unit_size) ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-50 text-amber-800 rounded-lg text-xs font-semibold border border-amber-200">
+                        📦 {item.unit || ''}{item.unit && item.unit_size ? ' • ' : ''}{item.unit_size || ''}
+                      </span>
+                    ) : (
+                      <span className="text-slate-300 text-xs italic">—</span>
+                    )}
+                  </td>
+                  <td className="p-4 text-right font-mono font-bold text-slate-800">
+                    {Number(item.price || 0) > 0 ? (
+                      <span className="text-emerald-700">৳{Number(item.price).toFixed(2)}</span>
+                    ) : (
+                      <span className="text-slate-300 text-xs italic font-normal">—</span>
                     )}
                   </td>
                   <td className="p-4 text-slate-400 text-xs">{item.created_at ? item.created_at.split('T')[0] : '-'}</td>
@@ -647,7 +763,7 @@ export default function MasterSupplierProducts() {
                   list="master-categories-datalist"
                   value={form.category}
                   onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
-                  placeholder="e.g. Beverages, Electronics, Snacks..."
+                  placeholder="e.g. Capsule, Tablet, Syrup..."
                   className="w-full border border-slate-200 rounded-xl p-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-white font-medium"
                 />
                 <datalist id="master-categories-datalist">
@@ -655,6 +771,40 @@ export default function MasterSupplierProducts() {
                     <option key={cat} value={cat} />
                   ))}
                 </datalist>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Unit (Opt)</label>
+                  <input
+                    type="text"
+                    value={form.unit}
+                    onChange={e => setForm(f => ({ ...f, unit: e.target.value }))}
+                    placeholder="e.g. Strip"
+                    className="w-full border border-slate-200 rounded-xl p-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-white font-medium"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Unit Size</label>
+                  <input
+                    type="text"
+                    value={form.unit_size}
+                    onChange={e => setForm(f => ({ ...f, unit_size: e.target.value }))}
+                    placeholder="e.g. 10x10"
+                    className="w-full border border-slate-200 rounded-xl p-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-white font-medium"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Price</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={form.price}
+                    onChange={e => setForm(f => ({ ...f, price: e.target.value }))}
+                    placeholder="0.00"
+                    className="w-full border border-slate-200 rounded-xl p-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-white font-medium font-mono"
+                  />
+                </div>
               </div>
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={() => setShowModal(false)} className="flex-1 py-2.5 border border-slate-200 text-slate-600 rounded-xl text-sm font-semibold hover:bg-slate-50 transition-colors">Cancel</button>
@@ -670,7 +820,7 @@ export default function MasterSupplierProducts() {
       {/* ─── CSV Upload Modal ──────────────────────────── */}
       {showCsvModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl p-6 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-2xl w-full max-w-3xl shadow-2xl p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-5">
               <h3 className="text-lg font-bold text-slate-800">Bulk CSV Upload</h3>
               <button onClick={() => { setShowCsvModal(false); setCsvText(''); setCsvParsed([]); setCsvErrors([]); }} className="text-slate-400 hover:text-slate-600">
@@ -679,12 +829,14 @@ export default function MasterSupplierProducts() {
             </div>
 
             {/* Template download */}
-            <div className="mb-4 p-3.5 bg-indigo-50 rounded-xl border border-indigo-100 flex items-center justify-between">
+            <div className="mb-4 p-3.5 bg-indigo-50 rounded-xl border border-indigo-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <p className="text-xs font-bold text-indigo-700 uppercase tracking-wider">Accepted CSV Columns</p>
-                <p className="text-xs text-indigo-600 mt-0.5 font-mono">supplier_name, product_name, category (optional)</p>
+                <p className="text-xs font-bold text-indigo-700 uppercase tracking-wider">Required CSV Columns & Order</p>
+                <p className="text-xs text-indigo-800 mt-0.5 font-mono font-semibold">
+                  product_name, category(optional), supplier_name, unit(Optional), unit_size, price
+                </p>
               </div>
-              <button onClick={downloadTemplate} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg transition-colors">Download Template</button>
+              <button onClick={downloadTemplate} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg transition-colors whitespace-nowrap self-start sm:self-auto">Download Template</button>
             </div>
 
             {/* File Upload */}
@@ -709,21 +861,27 @@ export default function MasterSupplierProducts() {
                   <p className="text-xs font-bold text-slate-600 uppercase tracking-wider">Preview ({csvParsed.length} rows)</p>
                   <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-semibold">✓ Ready to upload</span>
                 </div>
-                <div className="overflow-x-auto rounded-xl border border-slate-200 max-h-52 overflow-y-auto">
+                <div className="overflow-x-auto rounded-xl border border-slate-200 max-h-56 overflow-y-auto">
                   <table className="w-full text-xs">
                     <thead className="bg-slate-50 sticky top-0">
                       <tr>
-                        <th className="p-2 text-left font-bold text-slate-500">Supplier Name</th>
                         <th className="p-2 text-left font-bold text-slate-500">Product Name</th>
                         <th className="p-2 text-left font-bold text-slate-500">Category</th>
+                        <th className="p-2 text-left font-bold text-slate-500">Supplier Name</th>
+                        <th className="p-2 text-left font-bold text-slate-500">Unit</th>
+                        <th className="p-2 text-left font-bold text-slate-500">Unit Size</th>
+                        <th className="p-2 text-right font-bold text-slate-500">Price</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {csvParsed.slice(0, 50).map((row, i) => (
                         <tr key={i} className="hover:bg-slate-50">
+                          <td className="p-2 text-slate-800 font-semibold">{row.product_name}</td>
+                          <td className="p-2 text-slate-500">{row.category || <span className="text-slate-300 italic">—</span>}</td>
                           <td className="p-2 text-indigo-700 font-semibold">{row.supplier_name}</td>
-                          <td className="p-2 text-slate-700 font-medium">{row.product_name}</td>
-                          <td className="p-2 text-slate-500">{row.category || '—'}</td>
+                          <td className="p-2 text-slate-600">{row.unit || <span className="text-slate-300 italic">—</span>}</td>
+                          <td className="p-2 text-slate-600">{row.unit_size || <span className="text-slate-300 italic">—</span>}</td>
+                          <td className="p-2 text-right font-mono font-semibold text-emerald-700">৳{Number(row.price || 0).toFixed(2)}</td>
                         </tr>
                       ))}
                     </tbody>

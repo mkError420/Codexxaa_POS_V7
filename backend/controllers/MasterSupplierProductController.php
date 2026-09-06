@@ -19,6 +19,9 @@ class MasterSupplierProductController {
                     `supplier_name` VARCHAR(255) NOT NULL,
                     `product_name` VARCHAR(255) NOT NULL,
                     `category` VARCHAR(255) NULL,
+                    `unit` VARCHAR(100) NULL,
+                    `unit_size` VARCHAR(100) NULL,
+                    `price` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
                     `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                     INDEX `idx_supplier_name` (`supplier_name`),
@@ -28,10 +31,18 @@ class MasterSupplierProductController {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             ");
 
-            // Ensure category column exists for existing installations
-            $stmt = $pdo->query("SHOW COLUMNS FROM `master_supplier_products` LIKE 'category'");
-            if ($stmt->rowCount() === 0) {
-                $pdo->exec("ALTER TABLE `master_supplier_products` ADD COLUMN `category` VARCHAR(255) NULL AFTER `product_name`");
+            // Ensure category, unit, unit_size, price columns exist for existing installations
+            $columnsToCheck = [
+                'category' => "VARCHAR(255) NULL AFTER `product_name`",
+                'unit' => "VARCHAR(100) NULL AFTER `category`",
+                'unit_size' => "VARCHAR(100) NULL AFTER `unit`",
+                'price' => "DECIMAL(10,2) NOT NULL DEFAULT 0.00 AFTER `unit_size`"
+            ];
+            foreach ($columnsToCheck as $col => $colDef) {
+                $stmt = $pdo->query("SHOW COLUMNS FROM `master_supplier_products` LIKE '$col'");
+                if ($stmt->rowCount() === 0) {
+                    $pdo->exec("ALTER TABLE `master_supplier_products` ADD COLUMN `$col` $colDef");
+                }
             }
             // NOTE: Auto-seeding removed intentionally — seeding prevented deletions from persisting.
             // Products can be added manually or via CSV Bulk Upload.
@@ -66,7 +77,9 @@ class MasterSupplierProductController {
             $params = [];
 
             if (!empty($search)) {
-                $whereClauses[] = '(supplier_name LIKE ? OR product_name LIKE ? OR category LIKE ?)';
+                $whereClauses[] = '(supplier_name LIKE ? OR product_name LIKE ? OR category LIKE ? OR unit LIKE ? OR unit_size LIKE ?)';
+                $params[] = "%$search%";
+                $params[] = "%$search%";
                 $params[] = "%$search%";
                 $params[] = "%$search%";
                 $params[] = "%$search%";
@@ -107,7 +120,7 @@ class MasterSupplierProductController {
                 $total = (int)$countStmt->fetchColumn();
 
                 $offset = ($page - 1) * $limit;
-                $sql = "SELECT id, supplier_name, product_name, category, created_at, updated_at 
+                $sql = "SELECT id, supplier_name, product_name, category, unit, unit_size, price, created_at, updated_at 
                         FROM master_supplier_products $whereSql 
                         ORDER BY supplier_name ASC, product_name ASC 
                         LIMIT $limit OFFSET $offset";
@@ -125,7 +138,7 @@ class MasterSupplierProductController {
                 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             } else {
                 // Return all matching
-                $sql = "SELECT id, supplier_name, product_name, category, created_at, updated_at 
+                $sql = "SELECT id, supplier_name, product_name, category, unit, unit_size, price, created_at, updated_at 
                         FROM master_supplier_products $whereSql 
                         ORDER BY supplier_name ASC, product_name ASC";
                 $stmt = $pdo->prepare($sql);
@@ -193,6 +206,9 @@ class MasterSupplierProductController {
         $supplierName = isset($requestData['supplier_name']) ? trim($requestData['supplier_name']) : '';
         $productName = isset($requestData['product_name']) ? trim($requestData['product_name']) : '';
         $category = isset($requestData['category']) && trim($requestData['category']) !== '' ? trim($requestData['category']) : null;
+        $unit = isset($requestData['unit']) && trim($requestData['unit']) !== '' ? trim($requestData['unit']) : null;
+        $unitSize = isset($requestData['unit_size']) && trim($requestData['unit_size']) !== '' ? trim($requestData['unit_size']) : null;
+        $price = isset($requestData['price']) && is_numeric($requestData['price']) ? (float)$requestData['price'] : 0.00;
 
         if (empty($supplierName)) {
             Auth::jsonError('Supplier name is required.', 400);
@@ -205,28 +221,43 @@ class MasterSupplierProductController {
             $pdo = DB::getConnection();
 
             // Check if already exists (case-insensitive)
-            $checkStmt = $pdo->prepare("SELECT id, supplier_name, product_name, category FROM master_supplier_products WHERE LOWER(supplier_name) = LOWER(?) AND LOWER(product_name) = LOWER(?)");
+            $checkStmt = $pdo->prepare("SELECT id, supplier_name, product_name, category, unit, unit_size, price FROM master_supplier_products WHERE LOWER(supplier_name) = LOWER(?) AND LOWER(product_name) = LOWER(?)");
             $checkStmt->execute([$supplierName, $productName]);
             $existing = $checkStmt->fetch(PDO::FETCH_ASSOC);
 
             if ($existing) {
-                // If existing has no category and a category is provided, update it
-                if (empty($existing['category']) && !empty($category)) {
-                    $upStmt = $pdo->prepare("UPDATE master_supplier_products SET category = ? WHERE id = ?");
-                    $upStmt->execute([$category, $existing['id']]);
-                    $existing['category'] = $category;
-                }
-                http_response_code(409);
+                // Update existing with newly provided fields
+                $upStmt = $pdo->prepare("UPDATE master_supplier_products SET 
+                    category = CASE WHEN ? IS NOT NULL AND ? != '' THEN ? ELSE category END,
+                    unit = CASE WHEN ? IS NOT NULL AND ? != '' THEN ? ELSE unit END,
+                    unit_size = CASE WHEN ? IS NOT NULL AND ? != '' THEN ? ELSE unit_size END,
+                    price = CASE WHEN ? > 0 THEN ? ELSE price END
+                    WHERE id = ?");
+                $upStmt->execute([
+                    $category, $category, $category,
+                    $unit, $unit, $unit,
+                    $unitSize, $unitSize, $unitSize,
+                    $price, $price,
+                    $existing['id']
+                ]);
+
+                http_response_code(200);
                 header('Content-Type: application/json');
                 echo json_encode([
-                    'error' => 'Product already exists for this supplier.',
-                    'item' => $existing
+                    'message' => 'Product already existed for this supplier and was updated.',
+                    'id' => (int)$existing['id'],
+                    'supplier_name' => $supplierName,
+                    'product_name' => $productName,
+                    'category' => $category ?: $existing['category'],
+                    'unit' => $unit ?: $existing['unit'],
+                    'unit_size' => $unitSize ?: $existing['unit_size'],
+                    'price' => $price > 0 ? $price : (float)$existing['price']
                 ], JSON_UNESCAPED_UNICODE);
                 return;
             }
 
-            $insertStmt = $pdo->prepare("INSERT INTO master_supplier_products (supplier_name, product_name, category) VALUES (?, ?, ?)");
-            $insertStmt->execute([$supplierName, $productName, $category]);
+            $insertStmt = $pdo->prepare("INSERT INTO master_supplier_products (supplier_name, product_name, category, unit, unit_size, price) VALUES (?, ?, ?, ?, ?, ?)");
+            $insertStmt->execute([$supplierName, $productName, $category, $unit, $unitSize, $price]);
             $id = (int)$pdo->lastInsertId();
 
             http_response_code(201);
@@ -236,7 +267,10 @@ class MasterSupplierProductController {
                 'id' => $id,
                 'supplier_name' => $supplierName,
                 'product_name' => $productName,
-                'category' => $category
+                'category' => $category,
+                'unit' => $unit,
+                'unit_size' => $unitSize,
+                'price' => $price
             ], JSON_UNESCAPED_UNICODE);
 
         } catch (\Exception $e) {
@@ -247,6 +281,8 @@ class MasterSupplierProductController {
 
     /**
      * Bulk Upload master supplier products (JSON array)
+     * Supports format:
+     * product_name, category(optional), supplier_name, unit(Optional), unit_size, price
      */
     public static function bulkUpload($requestData) {
         Auth::authenticate();
@@ -268,24 +304,31 @@ class MasterSupplierProductController {
             $errors = [];
 
             $insertStmt = $pdo->prepare("
-                INSERT INTO master_supplier_products (supplier_name, product_name, category) 
-                VALUES (?, ?, ?)
+                INSERT INTO master_supplier_products (supplier_name, product_name, category, unit, unit_size, price) 
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON DUPLICATE KEY UPDATE 
-                    category = CASE WHEN VALUES(category) IS NOT NULL AND VALUES(category) != '' THEN VALUES(category) ELSE category END
+                    category = CASE WHEN VALUES(category) IS NOT NULL AND VALUES(category) != '' THEN VALUES(category) ELSE category END,
+                    unit = CASE WHEN VALUES(unit) IS NOT NULL AND VALUES(unit) != '' THEN VALUES(unit) ELSE unit END,
+                    unit_size = CASE WHEN VALUES(unit_size) IS NOT NULL AND VALUES(unit_size) != '' THEN VALUES(unit_size) ELSE unit_size END,
+                    price = CASE WHEN VALUES(price) > 0 THEN VALUES(price) ELSE price END
             ");
 
             foreach ($items as $idx => $item) {
-                $sup = isset($item['supplier_name']) ? trim($item['supplier_name']) : '';
-                $prod = isset($item['product_name']) ? trim($item['product_name']) : '';
+                // Support keys: product_name, category, supplier_name, unit, unit_size, price
+                $prod = trim($item['product_name'] ?? $item['name'] ?? $item['product'] ?? '');
+                $sup = trim($item['supplier_name'] ?? $item['supplier'] ?? '');
                 $cat = isset($item['category']) && trim($item['category']) !== '' ? trim($item['category']) : null;
+                $unit = isset($item['unit']) && trim($item['unit']) !== '' ? trim($item['unit']) : null;
+                $unitSize = isset($item['unit_size']) && trim($item['unit_size']) !== '' ? trim($item['unit_size']) : ($item['size'] ?? null);
+                $price = isset($item['price']) && is_numeric($item['price']) ? (float)$item['price'] : 0.00;
 
-                if (empty($sup) || empty($prod)) {
+                if (empty($prod) || empty($sup)) {
                     $skippedCount++;
-                    $errors[] = "Row " . ($idx + 1) . ": Supplier name and Product name are required.";
+                    $errors[] = "Row " . ($idx + 1) . ": Product name and Supplier name are required.";
                     continue;
                 }
 
-                $insertStmt->execute([$sup, $prod, $cat]);
+                $insertStmt->execute([$sup, $prod, $cat, $unit, $unitSize, $price]);
                 $affected = $insertStmt->rowCount();
                 if ($affected === 1) {
                     $insertedCount++;
@@ -328,6 +371,9 @@ class MasterSupplierProductController {
         $supplierName = isset($requestData['supplier_name']) ? trim($requestData['supplier_name']) : '';
         $productName = isset($requestData['product_name']) ? trim($requestData['product_name']) : '';
         $category = isset($requestData['category']) && trim($requestData['category']) !== '' ? trim($requestData['category']) : null;
+        $unit = isset($requestData['unit']) && trim($requestData['unit']) !== '' ? trim($requestData['unit']) : null;
+        $unitSize = isset($requestData['unit_size']) && trim($requestData['unit_size']) !== '' ? trim($requestData['unit_size']) : null;
+        $price = isset($requestData['price']) && is_numeric($requestData['price']) ? (float)$requestData['price'] : 0.00;
 
         if (empty($supplierName)) {
             Auth::jsonError('Supplier name is required.', 400);
@@ -346,8 +392,15 @@ class MasterSupplierProductController {
                 Auth::jsonError('Another entry already exists with this supplier and product name.', 409);
             }
 
-            $stmt = $pdo->prepare("UPDATE master_supplier_products SET supplier_name = ?, product_name = ?, category = ? WHERE id = ?");
-            $stmt->execute([$supplierName, $productName, $category, (int)$id]);
+            $stmt = $pdo->prepare("UPDATE master_supplier_products SET 
+                supplier_name = ?, 
+                product_name = ?, 
+                category = ?, 
+                unit = ?, 
+                unit_size = ?, 
+                price = ? 
+                WHERE id = ?");
+            $stmt->execute([$supplierName, $productName, $category, $unit, $unitSize, $price, (int)$id]);
 
             header('Content-Type: application/json');
             echo json_encode([
@@ -355,7 +408,10 @@ class MasterSupplierProductController {
                 'id' => (int)$id,
                 'supplier_name' => $supplierName,
                 'product_name' => $productName,
-                'category' => $category
+                'category' => $category,
+                'unit' => $unit,
+                'unit_size' => $unitSize,
+                'price' => $price
             ], JSON_UNESCAPED_UNICODE);
 
         } catch (\Exception $e) {
@@ -424,7 +480,7 @@ class MasterSupplierProductController {
 
         try {
             $pdo = DB::getConnection();
-            $stmt = $pdo->query("SELECT id, supplier_name, product_name, category, created_at FROM master_supplier_products ORDER BY supplier_name ASC, product_name ASC");
+            $stmt = $pdo->query("SELECT id, product_name, category, supplier_name, unit, unit_size, price, created_at FROM master_supplier_products ORDER BY supplier_name ASC, product_name ASC");
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
             header('Content-Type: text/csv; charset=utf-8');
@@ -433,14 +489,17 @@ class MasterSupplierProductController {
             $output = fopen('php://output', 'w');
             // Add UTF-8 BOM for Excel compatibility
             fprintf($output, chr(0xEF).chr(0xBB).chr(0xBF));
-            fputcsv($output, ['ID', 'Supplier Name', 'Product Name', 'Category', 'Created At']);
+            fputcsv($output, ['ID', 'Product Name', 'Category', 'Supplier Name', 'Unit', 'Unit Size', 'Price', 'Created At']);
 
             foreach ($rows as $row) {
                 fputcsv($output, [
                     $row['id'],
-                    $row['supplier_name'],
                     $row['product_name'],
                     $row['category'] ?? '',
+                    $row['supplier_name'],
+                    $row['unit'] ?? '',
+                    $row['unit_size'] ?? '',
+                    $row['price'] ?? '0.00',
                     $row['created_at']
                 ]);
             }

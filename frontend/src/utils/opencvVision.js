@@ -1234,7 +1234,8 @@ export function matchProductComprehensive({
           cost_price: existingLocal && parseFloat(existingLocal.cost_price) > 0 ? parseFloat(existingLocal.cost_price) : defaultCost,
           sku: existingLocal ? existingLocal.sku : '',
           stock_quantity: existingLocal ? existingLocal.stock_quantity : 0,
-          unit: existingLocal ? existingLocal.unit : 'piece',
+          unit: (existingLocal && existingLocal.unit) || masterItem.unit || 'piece',
+          unit_size: (existingLocal && existingLocal.unit_size) || masterItem.unit_size || '',
           is_master_catalog: true
         };
 
@@ -1243,6 +1244,10 @@ export function matchProductComprehensive({
           if (score > candidates[exists].confidence || !candidates[exists].product.supplier_name) {
             candidates[exists].product.supplier_name = combinedProduct.supplier_name;
             candidates[exists].product.category = combinedProduct.category;
+            candidates[exists].product.unit = combinedProduct.unit;
+            candidates[exists].product.unit_size = combinedProduct.unit_size;
+            candidates[exists].product.price = combinedProduct.price;
+            candidates[exists].product.cost_price = combinedProduct.cost_price;
             candidates[exists].confidence = Math.max(candidates[exists].confidence, score);
             candidates[exists].reason = matchReason;
           }

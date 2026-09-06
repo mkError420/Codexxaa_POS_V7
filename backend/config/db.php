@@ -210,6 +210,16 @@ class DB {
                 $pdo->exec("ALTER TABLE `purchase_order_items` ADD COLUMN `expiry_date` DATE NULL");
             }
 
+            // Check if unit_size column exists on products table
+            if ($tableExists('products') && !$columnExists('products', 'unit_size')) {
+                $pdo->exec("ALTER TABLE `products` ADD COLUMN `unit_size` VARCHAR(100) NULL AFTER `unit`");
+            }
+
+            // Check if unit_size column exists on purchase_order_items table
+            if ($tableExists('purchase_order_items') && !$columnExists('purchase_order_items', 'unit_size')) {
+                $pdo->exec("ALTER TABLE `purchase_order_items` ADD COLUMN `unit_size` VARCHAR(100) NULL");
+            }
+
             // Create contact_information table if not exists
             if (!$tableExists('contact_information')) {
                 $pdo->exec("
@@ -293,9 +303,20 @@ class DB {
                 $pdo->exec("ALTER TABLE `sale_items` ADD COLUMN `cost_price` DECIMAL(10,2) NOT NULL DEFAULT 0.00");
             }
 
-            // Check if category column exists on master_supplier_products table
-            if ($tableExists('master_supplier_products') && !$columnExists('master_supplier_products', 'category')) {
-                $pdo->exec("ALTER TABLE `master_supplier_products` ADD COLUMN `category` VARCHAR(255) NULL AFTER `product_name`");
+            // Check if columns exist on master_supplier_products table
+            if ($tableExists('master_supplier_products')) {
+                if (!$columnExists('master_supplier_products', 'category')) {
+                    $pdo->exec("ALTER TABLE `master_supplier_products` ADD COLUMN `category` VARCHAR(255) NULL AFTER `product_name`");
+                }
+                if (!$columnExists('master_supplier_products', 'unit')) {
+                    $pdo->exec("ALTER TABLE `master_supplier_products` ADD COLUMN `unit` VARCHAR(100) NULL AFTER `category`");
+                }
+                if (!$columnExists('master_supplier_products', 'unit_size')) {
+                    $pdo->exec("ALTER TABLE `master_supplier_products` ADD COLUMN `unit_size` VARCHAR(100) NULL AFTER `unit`");
+                }
+                if (!$columnExists('master_supplier_products', 'price')) {
+                    $pdo->exec("ALTER TABLE `master_supplier_products` ADD COLUMN `price` DECIMAL(10,2) NOT NULL DEFAULT 0.00 AFTER `unit_size`");
+                }
             }
 
             // Create supplier_returns table if not exists
@@ -760,10 +781,15 @@ class DB {
                     `id` INT AUTO_INCREMENT PRIMARY KEY,
                     `supplier_name` VARCHAR(255) NOT NULL,
                     `product_name` VARCHAR(255) NOT NULL,
+                    `category` VARCHAR(255) NULL,
+                    `unit` VARCHAR(100) NULL,
+                    `unit_size` VARCHAR(100) NULL,
+                    `price` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
                     `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                     INDEX `idx_supplier_name` (`supplier_name`),
                     INDEX `idx_product_name` (`product_name`),
+                    INDEX `idx_category` (`category`),
                     UNIQUE KEY `unique_supplier_product` (`supplier_name`(191), `product_name`(191))
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             ");
