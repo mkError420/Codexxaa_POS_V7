@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import API_BASE_URL from '../config';
+import ComputerVisionModal from './ComputerVisionModal';
 
 export default function Suppliers() {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
@@ -32,6 +33,7 @@ export default function Suppliers() {
   const [isEditPoMode, setIsEditPoMode] = useState(false);
   const [showPoDetailsModal, setShowPoDetailsModal] = useState(false);
   const [showReceiveModal, setShowReceiveModal] = useState(false);
+  const [showPoVisionModal, setShowPoVisionModal] = useState(false); // Vision AI Camera Scanner for PO
 
   // Shared entity states
   const [productsList, setProductsList] = useState([]);
@@ -1190,6 +1192,103 @@ export default function Suppliers() {
         }));
       }
     }
+  };
+
+  // Helper to extract known pharmaceutical/manufacturing company name from OCR text
+  const findCompanyInText = (text = '') => {
+    if (!text) return '';
+    const lower = text.toLowerCase();
+    const companyMappings = [
+      { key: 'beximco', name: 'Beximco Pharmaceuticals Ltd.' },
+      { key: 'square', name: 'Square Pharmaceuticals PLC Gazipur' },
+      { key: 'incepta', name: 'Incepta Pharmaceuticals Ltd.' },
+      { key: 'renata', name: 'Renata Limited' },
+      { key: 'aci', name: 'ACI Limited' },
+      { key: 'aristopharma', name: 'Aristopharma Ltd.' },
+      { key: 'eskayef', name: 'Eskayef Pharmaceuticals Ltd.' },
+      { key: 'sk+f', name: 'Eskayef Pharmaceuticals Ltd.' },
+      { key: 'opsonin', name: 'Opsonin Pharma Ltd.' },
+      { key: 'healthcare', name: 'Healthcare Pharmaceuticals Ltd.' },
+      { key: 'acme', name: 'The ACME Laboratories Ltd.' },
+      { key: 'drug international', name: 'Drug International Ltd.' },
+      { key: 'ibn sina', name: 'The IBN SINA Pharmaceutical Industry PLC' },
+      { key: 'popular', name: 'Popular Pharmaceuticals Ltd.' },
+      { key: 'unilever', name: 'Unilever Bangladesh' },
+      { key: 'nestle', name: 'Nestle Bangladesh' },
+      { key: 'pran', name: 'PRAN-RFL Group' }
+    ];
+
+    const found = companyMappings.find(c => lower.includes(c.key));
+    if (found) return found.name;
+
+    // Also check current suppliers list
+    const matchedFromSuppliers = suppliers.find(s => s.name && lower.includes(s.name.toLowerCase()));
+    if (matchedFromSuppliers) return matchedFromSuppliers.name;
+
+    return '';
+  };
+
+  // Vision Auto-Scan Handler for Purchase Order (Auto-fills Company, Product, Category, Price, SKU)
+  const handlePoVisionProductSelect = async (matchedProduct, scanMeta) => {
+    if (!matchedProduct) return;
+
+    // 1. Identify Company / Supplier Name
+    let companyName = matchedProduct.supplier_name || '';
+    if (!companyName && scanMeta?.detectedText) {
+      companyName = findCompanyInText(scanMeta.detectedText);
+    }
+
+    if (companyName && !selectedSupplierId) {
+      let matchedSupplier = suppliers.find(s =>
+        (matchedProduct.supplier_id && String(s.id) === String(matchedProduct.supplier_id)) ||
+        (s.name && s.name.trim().toLowerCase() === companyName.trim().toLowerCase())
+      );
+
+      if (matchedSupplier) {
+        setSupplierSearch(matchedSupplier.name);
+        setPoFormData(prev => ({ ...prev, supplier_id: String(matchedSupplier.id) }));
+      } else {
+        // Auto create new supplier locally
+        const created = await createOrGetSupplier(companyName.trim());
+        if (created) {
+          setSupplierSearch(created.name);
+          setPoFormData(prev => ({ ...prev, supplier_id: String(created.id) }));
+        }
+      }
+    }
+
+    // 2. Set Product Name & Search
+    setProductSearch(matchedProduct.name);
+
+    // 3. Set Category, Cost Price, Selling Price, and SKU
+    const sp = parseFloat(matchedProduct.price || 0);
+    const cp = (matchedProduct.cost_price !== undefined && matchedProduct.cost_price !== null && parseFloat(matchedProduct.cost_price) > 0)
+      ? parseFloat(matchedProduct.cost_price)
+      : parseFloat((sp > 0 ? (sp * 0.85).toFixed(2) : '0')); // 15% standard margin fallback
+
+    let calculatedPct = '';
+    if (sp > 0 && cp >= 0) {
+      const p = (((sp - cp) / sp) * 100).toFixed(2);
+      calculatedPct = parseFloat(p) !== 0 ? String(parseFloat(p)) : '0';
+    }
+
+    setPoFormData(prev => ({
+      ...prev,
+      product_id: String(matchedProduct.id || ''),
+      is_new: !matchedProduct.id,
+      name: matchedProduct.name,
+      sku: matchedProduct.sku || scanMeta?.detectedBarcode || prev.sku || '',
+      category: matchedProduct.category || prev.category || 'Medicine',
+      cost_price: String(cp || ''),
+      selling_price: String(sp || ''),
+      discount_percent: calculatedPct,
+      quantity_ordered: prev.quantity_ordered || 1,
+      unit: matchedProduct.unit || prev.unit || 'piece',
+      expiry_date: matchedProduct.expiry_date || prev.expiry_date || ''
+    }));
+
+    setShowPoVisionModal(false);
+    triggerAlert('success', `Vision Scanned: "${matchedProduct.name}" • Company: ${companyName || 'Set'} • Price: ৳${sp.toFixed(2)}`);
   };
 
   const openEditPo = async (po) => {
@@ -5206,6 +5305,16 @@ export default function Suppliers() {
       {/* --- ADD PO MODAL --- */}
       {showAddPoModal && renderAddPoModal()}
 
+      {/* --- COMPUTER VISION PO AUTO-SCAN MODAL --- */}
+      <ComputerVisionModal
+        isOpen={showPoVisionModal}
+        onClose={() => setShowPoVisionModal(false)}
+        products={productsList}
+        onSelectProduct={handlePoVisionProductSelect}
+        mode="purchase_order"
+        title="Vision Auto-Scan for Purchase Order"
+      />
+
       {/* --- PO DETAILS MODAL --- */}
       {showPoDetailsModal && renderPoDetailsModal()}
 
@@ -6027,30 +6136,26 @@ export default function Suppliers() {
 
           <form className="mt-4 space-y-4 overflow-y-auto pr-1 flex-1">
 
-            {/* ── BARCODE SCANNER STRIP ─────────────────────────── */}
-            <div className={`rounded-xl border-2 transition-all duration-200 ${barcodeMode
-                ? 'border-indigo-400 bg-indigo-50/60 shadow-sm'
-                : 'border-dashed border-slate-300 bg-slate-50/50'
-              } p-3`}>
-              <div className="flex items-center gap-3">
-                {/* Barcode icon */}
-                <div className={`flex-shrink-0 p-2 rounded-lg ${barcodeMode ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-500'
-                  }`}>
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v1m0 14v1M4.93 4.93l.7.7m12.74 12.74l.7.7M1 12h1m20 0h1M4.93 19.07l.7-.7M18.36 5.64l.7-.7" />
-                    <rect x="7" y="8" width="2" height="8" rx="0.5" fill="currentColor" stroke="none" />
-                    <rect x="11" y="8" width="1" height="8" rx="0.5" fill="currentColor" stroke="none" />
-                    <rect x="14" y="8" width="3" height="8" rx="0.5" fill="currentColor" stroke="none" />
-                  </svg>
-                </div>
+            {/* ── BARCODE & VISION SCANNER STRIP ─────────────────────────── */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {/* 1. Barcode Scanner Option */}
+              <div className={`rounded-xl border-2 transition-all duration-200 ${barcodeMode
+                  ? 'border-indigo-400 bg-indigo-50/60 shadow-sm'
+                  : 'border-dashed border-slate-300 bg-slate-50/50'
+                } p-3 flex flex-col justify-between`}>
+                <div className="flex items-center gap-2.5">
+                  <div className={`flex-shrink-0 p-2 rounded-lg ${barcodeMode ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-500'}`}>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v1m0 14v1M4.93 4.93l.7.7m12.74 12.74l.7.7M1 12h1m20 0h1M4.93 19.07l.7-.7M18.36 5.64l.7-.7" />
+                      <rect x="7" y="8" width="2" height="8" rx="0.5" fill="currentColor" stroke="none" />
+                      <rect x="11" y="8" width="1" height="8" rx="0.5" fill="currentColor" stroke="none" />
+                      <rect x="14" y="8" width="3" height="8" rx="0.5" fill="currentColor" stroke="none" />
+                    </svg>
+                  </div>
 
-                <div className="flex-1">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">
-                      {barcodeMode ? '🟢 Scanner Active — Scan or Type SKU + Enter' : 'Barcode Scanner'}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] text-slate-400">Shortcut: F2</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-700">Barcode Scanner (F2)</span>
                       <button
                         type="button"
                         onClick={() => {
@@ -6059,68 +6164,89 @@ export default function Suppliers() {
                           setBarcodeStatus(null);
                           if (next) setTimeout(() => barcodeInputRef.current?.focus(), 80);
                         }}
-                        className={`text-xs font-bold px-2.5 py-1 rounded-lg transition-colors ${barcodeMode
-                            ? 'bg-indigo-600 text-white hover:bg-indigo-700'
+                        className={`text-[11px] font-bold px-2 py-0.5 rounded-lg transition-colors ${barcodeMode
+                            ? 'bg-indigo-600 text-white'
                             : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
                           }`}
                       >
-                        {barcodeMode ? 'Disable' : 'Enable Scanner'}
+                        {barcodeMode ? 'Disable' : 'Enable'}
                       </button>
                     </div>
                   </div>
+                </div>
 
-                  {barcodeMode && (
-                    <div className="flex gap-2">
-                      <input
-                        ref={barcodeInputRef}
-                        type="text"
-                        value={barcodeInput}
-                        onChange={(e) => setBarcodeInput(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            handleBarcodeScan(barcodeInput);
-                          }
-                        }}
-                        placeholder="Scan barcode or type SKU and press Enter..."
-                        autoComplete="off"
-                        autoFocus
-                        className="flex-1 border-2 border-indigo-300 focus:border-indigo-500 rounded-lg p-2 text-sm font-mono outline-none bg-white placeholder:text-slate-400 focus:ring-1 focus:ring-indigo-300"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => handleBarcodeScan(barcodeInput)}
-                        className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-xs transition-colors flex items-center gap-1"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-4.35-4.35M17 11A6 6 0 105 11a6 6 0 0012 0z" />
-                        </svg>
-                        <span>Lookup</span>
-                      </button>
+                {barcodeMode && (
+                  <div className="flex gap-2 mt-2">
+                    <input
+                      ref={barcodeInputRef}
+                      type="text"
+                      value={barcodeInput}
+                      onChange={(e) => setBarcodeInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleBarcodeScan(barcodeInput);
+                        }
+                      }}
+                      placeholder="Scan SKU & Enter..."
+                      autoComplete="off"
+                      autoFocus
+                      className="flex-1 border-2 border-indigo-300 focus:border-indigo-500 rounded-lg p-1.5 text-xs font-mono outline-none bg-white"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleBarcodeScan(barcodeInput)}
+                      className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-xs"
+                    >
+                      Lookup
+                    </button>
+                  </div>
+                )}
+
+                {barcodeStatus && (
+                  <div className={`mt-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold ${barcodeStatus.type === 'success'
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : 'bg-rose-100 text-rose-800'
+                    }`}>
+                    {barcodeStatus.msg}
+                  </div>
+                )}
+              </div>
+
+              {/* 2. Computer Vision Auto-Scan Product Box Option */}
+              <div className="rounded-xl border-2 border-indigo-300/80 bg-gradient-to-r from-indigo-50/70 to-violet-50/70 p-3 shadow-sm flex flex-col justify-between">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 rounded-lg bg-gradient-to-tr from-indigo-600 to-violet-600 text-white shadow-sm shadow-indigo-500/30">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                      </svg>
                     </div>
-                  )}
-
-                  {/* Scan feedback status */}
-                  {barcodeStatus && (
-                    <div className={`mt-2 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 ${barcodeStatus.type === 'success'
-                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                        : barcodeStatus.type === 'warn'
-                          ? 'bg-amber-100 text-amber-800 border border-amber-200'
-                          : 'bg-rose-100 text-rose-800 border border-rose-200'
-                      }`}>
-                      {barcodeStatus.msg}
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-bold text-indigo-950">Vision Auto-Scan (AI Camera)</span>
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
+                      </div>
+                      <p className="text-[10px] text-slate-500">Scan box to auto-fill Company, Product, Category & Price</p>
                     </div>
-                  )}
+                  </div>
 
-                  {!barcodeMode && (
-                    <p className="text-[11px] text-slate-400 mt-0.5">
-                      Enable scanner to quickly add products by scanning their barcode/SKU. Press <kbd className="bg-slate-200 px-1 rounded text-[10px]">F2</kbd> to activate.
-                    </p>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => setShowPoVisionModal(true)}
+                    className="px-3 py-1.5 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white font-bold rounded-lg text-xs shadow-md shadow-indigo-600/30 active:scale-95 transition-all flex items-center gap-1.5 flex-shrink-0"
+                    title="Open Vision Auto-Scan (Alt+C)"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                    </svg>
+                    <span>Auto-Scan Box</span>
+                  </button>
                 </div>
               </div>
             </div>
-            {/* ── END BARCODE SCANNER STRIP ────────────────────── */}
+            {/* ── END BARCODE & VISION SCANNER STRIP ────────────────────── */}
 
             <div className={`grid grid-cols-1 ${isEditPoMode ? 'sm:grid-cols-4' : 'sm:grid-cols-3'} gap-4`}>
               <div>

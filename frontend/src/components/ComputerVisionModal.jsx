@@ -16,6 +16,9 @@ export default function ComputerVisionModal({
   onClose,
   products = [],
   onAddToCart,
+  onSelectProduct,
+  mode = 'pos', // 'pos' | 'purchase_order' | 'general'
+  title = null,
   currency = '৳'
 }) {
   const videoRef = useRef(null);
@@ -182,7 +185,7 @@ export default function ComputerVisionModal({
 
       setMatchCandidates(matches);
 
-      // Auto-Add logic if enabled
+      // Auto-Add or Auto-Select logic
       if (autoAddEnabled && matches.length > 0) {
         const top = matches[0];
         const now = Date.now();
@@ -190,7 +193,11 @@ export default function ComputerVisionModal({
         const timeSince = now - lastAutoAddedTimeRef.current;
 
         if (top.confidence >= confidenceThreshold && (top.product.id !== lastAutoAddedIdRef.current || timeSince > cooldown)) {
-          handleAddProductToCart(top.product, 1, top.confidence);
+          if (mode === 'purchase_order' && onSelectProduct) {
+            handleSelectProductForAction(top.product, top.confidence);
+          } else if (onAddToCart) {
+            handleAddProductToCart(top.product, 1, top.confidence);
+          }
           lastAutoAddedIdRef.current = top.product.id;
           lastAutoAddedTimeRef.current = now;
         }
@@ -200,7 +207,7 @@ export default function ComputerVisionModal({
     } finally {
       setIsOcrProcessing(false);
     }
-  }, [products, trainedTemplates, autoAddEnabled, confidenceThreshold]);
+  }, [products, trainedTemplates, autoAddEnabled, confidenceThreshold, mode, onSelectProduct, onAddToCart]);
 
   // 6. Live Periodic Stream Analysis
   useEffect(() => {
@@ -238,7 +245,7 @@ export default function ComputerVisionModal({
     };
   }, [isOpen, isFrozen, detectedText, detectedBarcode, products, trainedTemplates, performDeepAnalysis]);
 
-  // 7. Handle Adding Product to Cart
+  // 7. Handle Adding Product to Cart (for POS Checkout)
   const handleAddProductToCart = (product, qty = 1, confidence = 0) => {
     if (!product || !onAddToCart) return;
 
@@ -255,7 +262,28 @@ export default function ComputerVisionModal({
     }, 2500);
   };
 
-  // 8. Toggle Freeze Frame
+  // 8. Handle Selecting Product for Purchase Order Form
+  const handleSelectProductForAction = (product, confidence = 0) => {
+    if (!product) return;
+
+    playScanChime('success');
+
+    if (onSelectProduct) {
+      onSelectProduct(product, {
+        detectedText,
+        detectedBarcode,
+        confidence: confidence || 95
+      });
+    } else if (onAddToCart) {
+      onAddToCart(product, selectedQuantity);
+    }
+
+    if (mode === 'purchase_order') {
+      onClose();
+    }
+  };
+
+  // 9. Toggle Freeze Frame
   const handleToggleFreeze = () => {
     setIsFrozen(prev => {
       const next = !prev;
@@ -267,7 +295,7 @@ export default function ComputerVisionModal({
     });
   };
 
-  // 9. Handle File Upload
+  // 10. Handle File Upload
   const handleImageUpload = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -290,7 +318,7 @@ export default function ComputerVisionModal({
     reader.readAsDataURL(file);
   };
 
-  // 10. Snapshot Capture for Training
+  // 11. Snapshot Capture for Training
   const handleCaptureForTraining = () => {
     if (!canvasRef.current) return;
     const canvas = canvasRef.current;
@@ -301,7 +329,7 @@ export default function ComputerVisionModal({
     playScanChime('capture');
   };
 
-  // 11. Save Custom Training
+  // 12. Save Custom Training
   const handleSaveTraining = () => {
     if (!trainSnapshotData || !trainSelectedProductId) {
       alert('Please select a product and snap a frame first.');
@@ -338,13 +366,13 @@ export default function ComputerVisionModal({
     setTimeout(() => setRecentNotification(null), 3000);
   };
 
-  // 12. Delete Model
+  // 13. Delete Model
   const handleDeleteTraining = (id) => {
     const updated = deleteProductTemplate(id);
     setTrainedTemplates(updated);
   };
 
-  // 13. Hotkeys
+  // 14. Hotkeys
   useEffect(() => {
     if (!isOpen) return;
 
@@ -361,7 +389,7 @@ export default function ComputerVisionModal({
       } else if (e.key === 'Enter') {
         if (matchCandidates.length > 0) {
           e.preventDefault();
-          handleAddProductToCart(matchCandidates[0].product, selectedQuantity, matchCandidates[0].confidence);
+          handleSelectProductForAction(matchCandidates[0].product, matchCandidates[0].confidence);
         }
       } else if (e.key === 'm' || e.key === 'M') {
         const modes = ['standard', 'canny', 'contours', 'hsv', 'threshold', 'keypoints'];
@@ -378,11 +406,21 @@ export default function ComputerVisionModal({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, isFrozen, visionMode, cameraDevices, selectedDeviceId, matchCandidates, selectedQuantity]);
+  }, [isOpen, isFrozen, visionMode, cameraDevices, selectedDeviceId, matchCandidates, selectedQuantity, mode]);
 
   if (!isOpen) return null;
 
   const topMatch = matchCandidates.length > 0 ? matchCandidates[0] : null;
+
+  const modalTitle = title || (
+    mode === 'purchase_order'
+      ? 'Vision Auto-Scan for Purchase Order'
+      : 'OpenCV & OCR Visual Scanner'
+  );
+
+  const modalSubtitle = mode === 'purchase_order'
+    ? 'Scan product or medicine box to auto-populate Company, Product Name, Category & Price'
+    : 'Recognizes medicines, packaged items, barcodes & produce';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-slate-950/85 backdrop-blur-md animate-fadeIn">
@@ -399,12 +437,12 @@ export default function ComputerVisionModal({
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h3 className="text-base font-bold text-white tracking-tight">OpenCV & OCR Visual Scanner</h3>
+                <h3 className="text-base font-bold text-white tracking-tight">{modalTitle}</h3>
                 <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full border bg-emerald-500/20 text-emerald-400 border-emerald-500/40">
-                  AI Multi-Modal Active
+                  {mode === 'purchase_order' ? 'PO Auto-Fill Active' : 'AI Multi-Modal Active'}
                 </span>
               </div>
-              <p className="text-xs text-slate-400">Recognizes medicines, packaged items, barcodes & produce</p>
+              <p className="text-xs text-slate-400">{modalSubtitle}</p>
             </div>
           </div>
 
@@ -504,7 +542,7 @@ export default function ComputerVisionModal({
                         </svg>
                       </div>
                       <h4 className="text-sm font-bold text-white mb-1">Camera Feed Inactive</h4>
-                      <p className="text-xs text-slate-400 max-w-sm mb-4">You can take a photo or upload an image file of the product directly.</p>
+                      <p className="text-xs text-slate-400 max-w-sm mb-4">You can take a photo or upload an image file of the product box directly.</p>
                       <button
                         type="button"
                         onClick={startCamera}
@@ -650,12 +688,14 @@ export default function ComputerVisionModal({
                 
                 <div className="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-3.5 flex items-center justify-between">
                   <div>
-                    <h4 className="text-xs font-bold text-white uppercase tracking-wider">Visual Recognition</h4>
-                    <p className="text-[11px] text-slate-400">Position package, medicine, or produce in frame</p>
+                    <h4 className="text-xs font-bold text-white uppercase tracking-wider">
+                      {mode === 'purchase_order' ? 'PO Product Auto-Detection' : 'Visual Recognition'}
+                    </h4>
+                    <p className="text-[11px] text-slate-400">Position product or medicine box in frame</p>
                   </div>
 
                   <label className="text-[11px] font-semibold text-slate-300 cursor-pointer flex items-center space-x-1.5">
-                    <span>Auto-Add</span>
+                    <span>{mode === 'purchase_order' ? 'Auto-Select' : 'Auto-Add'}</span>
                     <input
                       type="checkbox"
                       checked={autoAddEnabled}
@@ -684,7 +724,7 @@ export default function ComputerVisionModal({
                     <div className="flex items-center justify-between mb-3">
                       <span className="bg-indigo-500 text-white text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full tracking-wider flex items-center space-x-1">
                         <span>{topMatch.icon || '🎯'}</span>
-                        <span>BEST PRODUCT MATCH</span>
+                        <span>{mode === 'purchase_order' ? 'MATCHED PRODUCT & COMPANY' : 'BEST PRODUCT MATCH'}</span>
                       </span>
 
                       <div className="flex items-center space-x-1.5">
@@ -701,61 +741,83 @@ export default function ComputerVisionModal({
                       </div>
                     </div>
 
-                    <div className="flex items-start justify-between gap-3 mb-4">
-                      <div>
-                        <h3 className="text-base font-extrabold text-white leading-snug">
-                          {topMatch.product.name}
-                        </h3>
-                        <p className="text-xs text-indigo-300 mt-0.5">
-                          {topMatch.reason}
-                        </p>
-                        <div className="flex items-center space-x-2 mt-2 text-xs">
-                          <span className="text-slate-400 font-mono">SKU: {topMatch.product.sku || 'N/A'}</span>
-                          <span className="text-slate-600">•</span>
-                          <span className={`font-semibold ${
-                            (topMatch.product.stock_quantity || 0) > 0 ? 'text-emerald-400' : 'text-rose-400'
-                          }`}>
-                            {(topMatch.product.stock_quantity || 0) > 0 ? `${topMatch.product.stock_quantity} in stock` : 'Out of stock'}
+                    <div className="space-y-2 mb-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <h3 className="text-base font-extrabold text-white leading-snug">
+                            {topMatch.product.name}
+                          </h3>
+                          <p className="text-xs text-indigo-300 mt-0.5">
+                            {topMatch.reason}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-xs text-slate-400 block font-medium">Price</span>
+                          <span className="text-xl font-black text-emerald-400">
+                            {currency}{parseFloat(topMatch.product.price || 0).toFixed(2)}
                           </span>
                         </div>
                       </div>
 
-                      <div className="text-right">
-                        <span className="text-xs text-slate-400 block font-medium">Price</span>
-                        <span className="text-xl font-black text-emerald-400">
-                          {currency}{parseFloat(topMatch.product.price || 0).toFixed(2)}
-                        </span>
+                      {/* Product Details Grid (Company, Category, SKU) */}
+                      <div className="bg-slate-900/80 rounded-xl p-2.5 border border-slate-700/60 grid grid-cols-2 gap-2 text-[11px]">
+                        <div>
+                          <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">Company / Supplier:</span>
+                          <span className="font-semibold text-amber-300 truncate block">
+                            {topMatch.product.supplier_name || 'Generic / Unassigned'}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">Category:</span>
+                          <span className="font-semibold text-slate-200 truncate block">
+                            {topMatch.product.category || 'General / Medicine'}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">SKU Code:</span>
+                          <span className="font-mono text-slate-300">{topMatch.product.sku || 'N/A'}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">Stock Status:</span>
+                          <span className={`font-semibold ${(topMatch.product.stock_quantity || 0) > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {(topMatch.product.stock_quantity || 0) > 0 ? `${topMatch.product.stock_quantity} available` : 'Out of stock'}
+                          </span>
+                        </div>
                       </div>
                     </div>
 
                     <div className="flex items-center space-x-2 pt-2 border-t border-indigo-900/60">
-                      <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl p-1 text-white">
-                        <button
-                          type="button"
-                          onClick={() => setSelectedQuantity(Math.max(1, selectedQuantity - 1))}
-                          className="w-7 h-7 rounded-lg hover:bg-slate-800 flex items-center justify-center font-bold text-slate-400 hover:text-white"
-                        >
-                          -
-                        </button>
-                        <span className="w-8 text-center font-bold text-xs">{selectedQuantity}</span>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedQuantity(selectedQuantity + 1)}
-                          className="w-7 h-7 rounded-lg hover:bg-slate-800 flex items-center justify-center font-bold text-slate-400 hover:text-white"
-                        >
-                          +
-                        </button>
-                      </div>
+                      {mode !== 'purchase_order' && (
+                        <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl p-1 text-white">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedQuantity(Math.max(1, selectedQuantity - 1))}
+                            className="w-7 h-7 rounded-lg hover:bg-slate-800 flex items-center justify-center font-bold text-slate-400 hover:text-white"
+                          >
+                            -
+                          </button>
+                          <span className="w-8 text-center font-bold text-xs">{selectedQuantity}</span>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedQuantity(selectedQuantity + 1)}
+                            className="w-7 h-7 rounded-lg hover:bg-slate-800 flex items-center justify-center font-bold text-slate-400 hover:text-white"
+                          >
+                            +
+                          </button>
+                        </div>
+                      )}
 
                       <button
                         type="button"
-                        onClick={() => handleAddProductToCart(topMatch.product, selectedQuantity, topMatch.confidence)}
+                        onClick={() => handleSelectProductForAction(topMatch.product, topMatch.confidence)}
                         className="flex-1 py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white font-bold text-xs shadow-lg shadow-indigo-600/30 active:scale-98 transition-all flex items-center justify-center space-x-2"
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
                         </svg>
-                        <span>Add to Cart (Enter)</span>
+                        <span>
+                          {mode === 'purchase_order' ? 'Auto-Fill Purchase Order (Enter)' : 'Add to Cart (Enter)'}
+                        </span>
                       </button>
                     </div>
                   </div>
@@ -767,10 +829,10 @@ export default function ComputerVisionModal({
                       </svg>
                     </div>
                     <h5 className="text-xs font-bold text-white mb-1">
-                      {isOcrProcessing ? 'Scanning Product Text & Shape...' : 'Point Camera or Click "Scan / Read Text"'}
+                      {isOcrProcessing ? 'Scanning Product Text & Company...' : 'Point Camera or Click "Scan / Read Text"'}
                     </h5>
                     <p className="text-[11px] text-slate-500 max-w-xs mx-auto">
-                      Hold the medicine box, packaging, barcode, or produce inside the target reticle.
+                      Hold the medicine box (e.g. Napa, Ace), packaging, or barcode in front of the camera.
                     </p>
                   </div>
                 )}
@@ -792,6 +854,7 @@ export default function ComputerVisionModal({
                             <div className="truncate">
                               <p className="text-xs font-bold text-white truncate">{cand.product.name}</p>
                               <span className="text-[10px] text-slate-400">
+                                {cand.product.supplier_name ? `${cand.product.supplier_name} • ` : ''}
                                 {currency}{parseFloat(cand.product.price || 0).toFixed(2)} • {cand.confidence}%
                               </span>
                             </div>
@@ -799,10 +862,10 @@ export default function ComputerVisionModal({
 
                           <button
                             type="button"
-                            onClick={() => handleAddProductToCart(cand.product, 1, cand.confidence)}
+                            onClick={() => handleSelectProductForAction(cand.product, cand.confidence)}
                             className="px-2.5 py-1 bg-indigo-600/80 hover:bg-indigo-600 text-white rounded-lg text-xs font-semibold flex-shrink-0 transition-colors"
                           >
-                            + Add
+                            Select
                           </button>
                         </div>
                       ))}
@@ -819,7 +882,7 @@ export default function ComputerVisionModal({
                     <span>Keyboard Hotkeys</span>
                   </div>
                   <div className="grid grid-cols-2 gap-1.5 text-[10px]">
-                    <div><kbd className="bg-slate-800 px-1.5 py-0.5 rounded text-slate-300 font-mono">Enter</kbd> Add top match</div>
+                    <div><kbd className="bg-slate-800 px-1.5 py-0.5 rounded text-slate-300 font-mono">Enter</kbd> {mode === 'purchase_order' ? 'Auto-fill form' : 'Add top match'}</div>
                     <div><kbd className="bg-slate-800 px-1.5 py-0.5 rounded text-slate-300 font-mono">Space</kbd> Freeze frame</div>
                     <div><kbd className="bg-slate-800 px-1.5 py-0.5 rounded text-slate-300 font-mono">M</kbd> Vision filter</div>
                     <div><kbd className="bg-slate-800 px-1.5 py-0.5 rounded text-slate-300 font-mono">C</kbd> Switch camera</div>
