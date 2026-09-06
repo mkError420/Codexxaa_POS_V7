@@ -1111,7 +1111,8 @@ export function matchProductComprehensive({
   features = null,
   inventoryProducts = [],
   masterCatalogProducts = [],
-  customTrained = []
+  customTrained = [],
+  mode = 'pos'
 }) {
   const candidates = [];
   const normalizedOcr = (ocrText || '').toLowerCase().replace(/[^a-z0-9\s\-]/g, ' ');
@@ -1152,10 +1153,15 @@ export function matchProductComprehensive({
 
   // 2. OPTICAL CHARACTER RECOGNITION (OCR) MATCHING AGAINST LOCAL INVENTORY
   if (normalizedOcr.trim().length > 0 && inventoryProducts.length > 0) {
+    const ocrNoSpace = normalizedOcr.replace(/\s+/g, '');
+    // Pre-split OCR into individual word tokens for prefix matching
+    const ocrWords = normalizedOcr.split(/\s+/).filter(w => w.length >= 3);
+
     for (const prod of inventoryProducts) {
       const prodName = (prod.name || '').toLowerCase();
       const prodSku = (prod.sku || '').toLowerCase();
       const prodSupplier = (prod.supplier_name || '').toLowerCase();
+      const prodGeneric = (prod.generic_name || '').toLowerCase();
 
       let score = 0;
       let matchReason = '';
@@ -1167,35 +1173,115 @@ export function matchProductComprehensive({
       } else {
         const brandTokens = extractBrandTokens(prod.name);
 
-        // Core Brand Validation: AT LEAST one core distinctive brand token MUST be present
         if (brandTokens.length > 0) {
-          let matchedTokens = 0;
+          let matchedTokens = 0;       // full word-boundary matches
+          let prefixMatchedTokens = 0; // 3-4 letter prefix matches
+          let bestPrefixLen = 0;
+
           for (const token of brandTokens) {
             if (hasWordBoundary(normalizedOcr, token)) {
+              // Full exact word match
               matchedTokens++;
+            } else if (token.length >= 3) {
+              // PREFIX MATCH: check OCR words that start with first 3 or 4 chars of brand token
+              const prefix4 = token.length >= 4 ? token.slice(0, 4) : null;
+              const prefix3 = token.slice(0, 3);
+              const matched4 = prefix4 && ocrWords.some(w => w.startsWith(prefix4));
+              const matched3 = !matched4 && ocrWords.some(w => w.startsWith(prefix3));
+              if (matched4) {
+                prefixMatchedTokens++;
+                bestPrefixLen = Math.max(bestPrefixLen, 4);
+              } else if (matched3) {
+                prefixMatchedTokens++;
+                bestPrefixLen = Math.max(bestPrefixLen, 3);
+              }
             }
           }
 
-          // If the core brand does NOT match, score remains 0 (prevents Ace-plus matching Ebixa!)
           if (matchedTokens > 0) {
+            // Full word match path — high confidence
             score = 78 + Math.round((matchedTokens / brandTokens.length) * 12);
             matchReason = `Optical Brand Match: ${matchedTokens}/${brandTokens.length} brand words`;
 
-            // Check dosage strength match (e.g. 10mg, 500mg)
+            // Boost: dosage strength match (e.g. 10mg, 500mg)
             const strengthMatch = prodName.match(/(\d+(?:\.\d+)?\s*(?:iu|mg|gm|g|mcg|ml))\b/i);
-            if (strengthMatch && normalizedOcr.includes(strengthMatch[1].toLowerCase())) {
-              score = Math.min(98, score + 8);
-              matchReason += ` • Strength Confirmed: ${strengthMatch[1]}`;
+            if (strengthMatch) {
+              const cleanStrength = strengthMatch[1].replace(/\s+/g, '').toLowerCase();
+              if (ocrNoSpace.includes(cleanStrength)) {
+                score = Math.min(98, score + 8);
+                matchReason += ` • Strength Confirmed: ${strengthMatch[1]}`;
+              }
             }
-
-            // Check form match (tablet, capsule)
+            // Boost: dosage form / category
             if (prod.category && hasWordBoundary(normalizedOcr, prod.category.toLowerCase())) {
               score = Math.min(99, score + 4);
             }
+
+          } else if (prefixMatchedTokens > 0) {
+            // PREFIX FALLBACK: first 3-4 letters match — lower confidence than full word
+            const prefixRatio = prefixMatchedTokens / brandTokens.length;
+            const prefixBase = bestPrefixLen >= 4 ? 70 : 65;
+            score = prefixBase + Math.round(prefixRatio * 8);
+            matchReason = `Prefix Match (first ${bestPrefixLen} letters, ${prefixMatchedTokens}/${brandTokens.length} tokens): "${prod.name}"`;
+
+            // Boost: dosage strength
+            const strengthMatch = prodName.match(/(\d+(?:\.\d+)?\s*(?:iu|mg|gm|g|mcg|ml))\b/i);
+            if (strengthMatch) {
+              const cleanStrength = strengthMatch[1].replace(/\s+/g, '').toLowerCase();
+              if (ocrNoSpace.includes(cleanStrength)) {
+                score = Math.min(90, score + 8);
+                matchReason += ` • Strength Confirmed: ${strengthMatch[1]}`;
+              }
+            }
+            // Boost: category
+            if (prod.category && hasWordBoundary(normalizedOcr, prod.category.toLowerCase())) {
+              score = Math.min(90, score + 5);
+              matchReason += ` • Category Confirmed: ${prod.category}`;
+            }
+          } else {
+            // SUBSTRING FRAGMENT FALLBACK: any OCR word (≥3 chars) appears anywhere inside a brand token
+            // Handles garbled/partial OCR like "iod" matching "viodin", "vid" matching "Viodin"
+            let substringMatchedTokens = 0;
+            for (const token of brandTokens) {
+              if (ocrWords.some(w => w.length >= 3 && token.includes(w))) {
+                substringMatchedTokens++;
+              }
+            }
+            if (substringMatchedTokens > 0) {
+              const subRatio = substringMatchedTokens / brandTokens.length;
+              score = 62 + Math.round(subRatio * 6);
+              matchReason = `Fragment Match (${substringMatchedTokens}/${brandTokens.length} tokens): "${prod.name}"`;
+
+              // Boosts to reach ≥65 threshold
+              const strengthMatch = prodName.match(/(\d+(?:\.\d+)?\s*(?:iu|mg|gm|g|mcg|ml))\b/i);
+              if (strengthMatch) {
+                const cleanStrength = strengthMatch[1].replace(/\s+/g, '').toLowerCase();
+                if (ocrNoSpace.includes(cleanStrength)) {
+                  score = Math.min(85, score + 8);
+                  matchReason += ` • Strength Confirmed: ${strengthMatch[1]}`;
+                }
+              }
+              if (prod.category && hasWordBoundary(normalizedOcr, prod.category.toLowerCase())) {
+                score = Math.min(85, score + 5);
+                matchReason += ` • Category Confirmed: ${prod.category}`;
+              }
+            }
           }
+
         } else if (prodSku && hasWordBoundary(normalizedOcr, prodSku)) {
           score = 95;
           matchReason = `SKU code match: ${prod.sku}`;
+        }
+      }
+
+      // Check generic name if present
+      if (prodGeneric && hasWordBoundary(normalizedOcr, prodGeneric)) {
+        if (score > 0) {
+          score = Math.min(99, score + 6);
+          matchReason += ` • Generic Formula Confirmed: ${prod.generic_name}`;
+        } else {
+          score = 82;
+          matchReason = `Generic Chemical Match: "${prod.generic_name}"`;
         }
       }
 
@@ -1213,7 +1299,8 @@ export function matchProductComprehensive({
         }
       }
 
-      if (score >= 70) {
+      // Accept: full matches ≥70, prefix matches ≥65, fragment/substring matches ≥62
+      if (score >= 62) {
         if (!candidates.some(c => c.product.id === prod.id)) {
           candidates.push({
             product: prod,
@@ -1228,8 +1315,9 @@ export function matchProductComprehensive({
     }
   }
 
-  // 3. OPTICAL CHARACTER RECOGNITION MATCHING AGAINST SUPER ADMIN CATALOG
-  if (normalizedOcr.trim().length > 0 && masterCatalogProducts.length > 0) {
+  // 3. OPTICAL CHARACTER RECOGNITION MATCHING AGAINST SUPER ADMIN CATALOG (PO Mode only)
+  // In POS Checkout mode, we NEVER match external catalog items that do not exist in store inventory!
+  if (mode !== 'pos' && normalizedOcr.trim().length > 0 && masterCatalogProducts.length > 0) {
     for (const masterItem of masterCatalogProducts) {
       const mName = (masterItem.product_name || '').toLowerCase().trim();
       const mSupplier = (masterItem.supplier_name || '').toLowerCase().trim();
@@ -1256,9 +1344,13 @@ export function matchProductComprehensive({
             matchReason = `Catalog Brand Match: "${masterItem.product_name}"`;
 
             const strengthMatch = mName.match(/(\d+(?:\.\d+)?\s*(?:iu|mg|gm|g|mcg|ml))\b/i);
-            if (strengthMatch && normalizedOcr.includes(strengthMatch[1].toLowerCase())) {
-              score = Math.min(98, score + 8);
-              matchReason += ` • Strength Confirmed: ${strengthMatch[1]}`;
+            if (strengthMatch) {
+              const cleanStrength = strengthMatch[1].replace(/\s+/g, '').toLowerCase();
+              const ocrNoSpace = normalizedOcr.replace(/\s+/g, '');
+              if (ocrNoSpace.includes(cleanStrength)) {
+                score = Math.min(98, score + 8);
+                matchReason += ` • Strength Confirmed: ${strengthMatch[1]}`;
+              }
             }
           }
         }
@@ -1318,60 +1410,61 @@ export function matchProductComprehensive({
     }
   }
 
-  // 4. SMART MEDICINE PACKAGING PARSER (Dynamic Box Detection)
-  // If no existing catalog or inventory product had a strong brand match (>= 80%),
-  // or if OCR extracted a full medicine box with company/brand
-  const hasConfidentMatch = candidates.some(c => c.confidence >= 80);
-  if (!hasConfidentMatch && ocrText.trim().length > 0) {
-    const boxInfo = parseMedicinePackaging(ocrText);
-    if (boxInfo && boxInfo.productName) {
-      const detectedSupplier = boxInfo.company || detectedCompany || 'Verified Supplier';
+  // 4. SMART MEDICINE PACKAGING PARSER (Dynamic Box Detection - PO Mode only)
+  // In POS Checkout mode, we NEVER generate or suggest un-added medicine boxes (is_new / id: null)!
+  if (mode !== 'pos') {
+    const hasConfidentMatch = candidates.some(c => c.confidence >= 80);
+    if (!hasConfidentMatch && ocrText.trim().length > 0) {
+      const boxInfo = parseMedicinePackaging(ocrText);
+      if (boxInfo && boxInfo.productName) {
+        const detectedSupplier = boxInfo.company || detectedCompany || 'Verified Supplier';
 
-      const boxProduct = {
-        id: null,
-        name: boxInfo.productName,
-        generic_name: boxInfo.genericName || '',
-        supplier_name: detectedSupplier,
-        candidate_suppliers: boxInfo.candidateCompanies || [],
-        category: boxInfo.category || 'Medicine',
-        price: boxInfo.price || 35.00,
-        cost_price: boxInfo.costPrice || 29.75,
-        sku: boxInfo.batch || '',
-        expiry_date: boxInfo.expiry || '',
-        stock_quantity: 0,
-        unit: boxInfo.unit || 'piece',
-        unit_size: boxInfo.unitSize || '',
-        is_new: true,
-        is_master_catalog: false
-      };
+        const boxProduct = {
+          id: null,
+          name: boxInfo.productName,
+          generic_name: boxInfo.genericName || '',
+          supplier_name: detectedSupplier,
+          candidate_suppliers: boxInfo.candidateCompanies || [],
+          category: boxInfo.category || 'Medicine',
+          price: boxInfo.price || 35.00,
+          cost_price: boxInfo.costPrice || 29.75,
+          sku: boxInfo.batch || '',
+          expiry_date: boxInfo.expiry || '',
+          stock_quantity: 0,
+          unit: boxInfo.unit || 'piece',
+          unit_size: boxInfo.unitSize || '',
+          is_new: true,
+          is_master_catalog: false
+        };
 
-      candidates.unshift({
-        product: boxProduct,
-        confidence: boxInfo.company ? 93 : 86,
-        matchType: 'box_scan',
-        reason: `Medicine Packaging Detected: "${boxInfo.productName}" • Company: ${detectedSupplier}${boxInfo.genericName ? ` (${boxInfo.genericName})` : ''}`,
-        colorName: detectedSupplier,
-        icon: boxInfo.category === 'Capsule' ? '💊' : '📦'
-      });
+        candidates.unshift({
+          product: boxProduct,
+          confidence: boxInfo.company ? 93 : 86,
+          matchType: 'box_scan',
+          reason: `Medicine Packaging Detected: "${boxInfo.productName}" • Company: ${detectedSupplier}${boxInfo.genericName ? ` (${boxInfo.genericName})` : ''}`,
+          colorName: detectedSupplier,
+          icon: boxInfo.category === 'Capsule' ? '💊' : '📦'
+        });
 
-      // If multiple companies were detected on the packaging (e.g. Rottendorf Pharma as manufacturer & Lundbeck as marketer)
-      if (boxInfo.candidateCompanies && boxInfo.candidateCompanies.length > 1) {
-        for (let i = 1; i < boxInfo.candidateCompanies.length; i++) {
-          const altCompany = boxInfo.candidateCompanies[i];
-          candidates.push({
-            product: { ...boxProduct, supplier_name: altCompany },
-            confidence: 88,
-            matchType: 'box_scan_alt',
-            reason: `Alternate Manufacturer/Marketer: "${altCompany}"`,
-            colorName: altCompany,
-            icon: '🏢'
-          });
+        // If multiple companies were detected on the packaging (e.g. Rottendorf Pharma as manufacturer & Lundbeck as marketer)
+        if (boxInfo.candidateCompanies && boxInfo.candidateCompanies.length > 1) {
+          for (let i = 1; i < boxInfo.candidateCompanies.length; i++) {
+            const altCompany = boxInfo.candidateCompanies[i];
+            candidates.push({
+              product: { ...boxProduct, supplier_name: altCompany },
+              confidence: 88,
+              matchType: 'box_scan_alt',
+              reason: `Alternate Manufacturer/Marketer: "${altCompany}"`,
+              colorName: altCompany,
+              icon: '🏢'
+            });
+          }
         }
       }
     }
   }
 
-  // 4. USER-TRAINED VISUAL TEMPLATES
+  // 4b. USER-TRAINED VISUAL TEMPLATES
   const trainedList = customTrained.length > 0 ? customTrained : getTrainedTemplates();
   if (features) {
     for (const template of trainedList) {
@@ -1391,23 +1484,28 @@ export function matchProductComprehensive({
       const confidencePct = Math.round(overallScore * 100);
 
       if (confidencePct >= 45) {
-        const matchedInvProduct = inventoryProducts.find(p => p.id === template.productId) || {
-          id: template.productId,
-          name: template.productName,
-          price: template.price || 0,
-          stock_quantity: template.stock || 999,
-          sku: template.sku || 'TRAINED'
-        };
+        const matchedInvProduct = inventoryProducts.find(p => p.id === template.productId);
 
-        if (!candidates.some(c => c.product.id === matchedInvProduct.id)) {
-          candidates.push({
-            product: matchedInvProduct,
-            confidence: confidencePct,
-            matchType: 'trained',
-            reason: `Trained Visual Signature (${confidencePct}%)`,
-            colorName: template.colorName || 'Custom Signature',
-            icon: '🎯'
-          });
+        // In POS mode, strictly require the trained model to match a real inventory item
+        if (matchedInvProduct || mode !== 'pos') {
+          const finalProduct = matchedInvProduct || {
+            id: template.productId,
+            name: template.productName,
+            price: template.price || 0,
+            stock_quantity: template.stock || 999,
+            sku: template.sku || 'TRAINED'
+          };
+
+          if (!candidates.some(c => c.product.id === finalProduct.id)) {
+            candidates.push({
+              product: finalProduct,
+              confidence: confidencePct,
+              matchType: 'trained',
+              reason: `Trained Visual Signature (${confidencePct}%)`,
+              colorName: template.colorName || 'Custom Signature',
+              icon: '🎯'
+            });
+          }
         }
       }
     }
@@ -1462,6 +1560,13 @@ export function matchProductComprehensive({
         }
       }
     }
+  }
+
+  // STRICT GUARANTEE FOR POS CHECKOUT:
+  // Only products that genuinely exist in the store's inventory catalog can be returned!
+  if (mode === 'pos') {
+    const validInventoryIds = new Set(inventoryProducts.map(p => p.id));
+    candidates = candidates.filter(c => c.product && c.product.id && validInventoryIds.has(c.product.id));
   }
 
   candidates.sort((a, b) => b.confidence - a.confidence);

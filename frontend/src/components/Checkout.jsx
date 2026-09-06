@@ -1149,7 +1149,7 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
     });
   };
   // 3. Cart State Modifications
-  const addToCart = (product) => {
+  const addToCart = (product, quantityToAdd = 1) => {
     if (!activeTab) {
       triggerAlert('error', 'No active tab selected.');
       return;
@@ -1175,20 +1175,25 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
 
     // Individual product's own stock limit
     const stockLimit = parseFloat(product.stock_quantity || 0);
+    const qtyToAdd = typeof quantityToAdd === 'number' && quantityToAdd > 0 ? quantityToAdd : 1;
 
     if (existingIndex > -1) {
       const currentQty = activeTab.cart[existingIndex].quantity;
-      if (currentQty >= stockLimit) {
+      if (currentQty + qtyToAdd > stockLimit) {
         triggerAlert('error', `Cannot exceed available stock (${stockLimit}) for "${product.name}".`);
         return;
       }
       const updatedCart = [...activeTab.cart];
-      updatedCart[existingIndex] = { ...updatedCart[existingIndex], quantity: updatedCart[existingIndex].quantity + 1 };
+      updatedCart[existingIndex] = { ...updatedCart[existingIndex], quantity: updatedCart[existingIndex].quantity + qtyToAdd };
       updateActiveTabState('cart', updatedCart);
     } else {
+      if (qtyToAdd > stockLimit) {
+        triggerAlert('error', `Cannot exceed available stock (${stockLimit}) for "${product.name}".`);
+        return;
+      }
       updateActiveTabState('cart', [
         ...activeTab.cart,
-        { ...product, quantity: 1, price: product.price, stock_quantity: stockLimit },
+        { ...product, quantity: qtyToAdd, price: product.price, stock_quantity: stockLimit },
       ]);
     }
   };
@@ -2932,6 +2937,7 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
         isOpen={showVisionModal}
         onClose={() => setShowVisionModal(false)}
         products={products}
+        mode="pos"
         onAddToCart={(product, quantity) => {
           addToCart(product, quantity);
         }}

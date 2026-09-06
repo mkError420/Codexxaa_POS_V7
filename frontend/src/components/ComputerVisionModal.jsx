@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import API_BASE_URL from '../config';
 import {
   renderVisionOverlay,
   extractVisualFeatures,
@@ -69,6 +70,33 @@ export default function ComputerVisionModal({
   const [trainCustomLabel, setTrainCustomLabel] = useState('');
   const [trainSnapshotData, setTrainSnapshotData] = useState(null);
   const [trainSearch, setTrainSearch] = useState('');
+
+  // Complete store inventory list for POS checkout scanning
+  const [allInventory, setAllInventory] = useState([]);
+
+  // Fetch complete store inventory catalog when modal opens in POS mode
+  useEffect(() => {
+    if (!isOpen || mode !== 'pos') return;
+    const fetchFullInventory = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        const res = await fetch(`${API_BASE_URL}/products?purchased_only=true&exclude_expired=true`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0) {
+            setAllInventory(data);
+          }
+        }
+      } catch (err) {
+        console.warn('Could not load full inventory for scanner', err);
+      }
+    };
+    fetchFullInventory();
+  }, [isOpen, mode]);
+
+  const activeInventory = (allInventory && allInventory.length > 0) ? allInventory : products;
 
   // 1. Initialize Cameras & Templates on Open
   useEffect(() => {
@@ -192,9 +220,10 @@ export default function ComputerVisionModal({
         ocrText: cleanText,
         barcode: barcode || '',
         features: features,
-        inventoryProducts: products,
+        inventoryProducts: activeInventory,
         masterCatalogProducts: masterCatalogProducts,
-        customTrained: trainedTemplates
+        customTrained: trainedTemplates,
+        mode: mode
       });
 
       setMatchCandidates(matches);
@@ -209,11 +238,18 @@ export default function ComputerVisionModal({
         if (top.confidence >= confidenceThreshold && (top.product.id !== lastAutoAddedIdRef.current || timeSince > cooldown)) {
           if (mode === 'purchase_order' && onSelectProduct) {
             handleSelectProductForAction(top.product, top.confidence);
+            lastAutoAddedIdRef.current = top.product.id;
+            lastAutoAddedTimeRef.current = now;
           } else if (onAddToCart) {
-            handleAddProductToCart(top.product, 1, top.confidence);
+            // In POS mode, only auto-add if item is actually in stock
+            if (mode === 'pos' && (top.product.stock_quantity || 0) <= 0) {
+              // skip auto-adding out of stock item
+            } else {
+              handleAddProductToCart(top.product, 1, top.confidence);
+              lastAutoAddedIdRef.current = top.product.id;
+              lastAutoAddedTimeRef.current = now;
+            }
           }
-          lastAutoAddedIdRef.current = top.product.id;
-          lastAutoAddedTimeRef.current = now;
         }
       }
     } catch (e) {
@@ -221,7 +257,7 @@ export default function ComputerVisionModal({
     } finally {
       setIsOcrProcessing(false);
     }
-  }, [products, masterCatalogProducts, trainedTemplates, autoAddEnabled, confidenceThreshold, mode, onSelectProduct, onAddToCart]);
+  }, [activeInventory, masterCatalogProducts, trainedTemplates, autoAddEnabled, confidenceThreshold, mode, onSelectProduct, onAddToCart]);
 
   // 6. Live Periodic Stream Analysis
   useEffect(() => {
@@ -238,9 +274,10 @@ export default function ComputerVisionModal({
           ocrText: detectedText,
           barcode: detectedBarcode,
           features: features,
-          inventoryProducts: products,
+          inventoryProducts: activeInventory,
           masterCatalogProducts: masterCatalogProducts,
-          customTrained: trainedTemplates
+          customTrained: trainedTemplates,
+          mode: mode
         });
         if (matches.length > 0) {
           setMatchCandidates(matches);
@@ -258,11 +295,21 @@ export default function ComputerVisionModal({
       if (liveIntervalRef.current) clearInterval(liveIntervalRef.current);
       if (ocrIntervalRef.current) clearInterval(ocrIntervalRef.current);
     };
-  }, [isOpen, isFrozen, detectedText, detectedBarcode, products, masterCatalogProducts, trainedTemplates, performDeepAnalysis]);
+  }, [isOpen, isFrozen, detectedText, detectedBarcode, activeInventory, masterCatalogProducts, trainedTemplates, performDeepAnalysis, mode]);
 
   // 7. Handle Adding Product to Cart (for POS Checkout)
   const handleAddProductToCart = (product, qty = 1, confidence = 0) => {
     if (!product || !onAddToCart) return;
+
+    if (mode === 'pos' && (product.stock_quantity || 0) <= 0) {
+      playScanChime('error');
+      setRecentNotification({
+        message: `"${product.name}" is currently Out of Stock!`,
+        type: 'error'
+      });
+      setTimeout(() => setRecentNotification(null), 3000);
+      return;
+    }
 
     onAddToCart(product, qty);
     playScanChime('success');
@@ -277,9 +324,23 @@ export default function ComputerVisionModal({
     }, 2500);
   };
 
-  // 8. Handle Selecting Product for Purchase Order Form (incorporates any user overrides)
+  // 8. Handle Selecting Product for Purchase Order Form or POS Action
   const handleSelectProductForAction = (product, confidence = 0) => {
     if (!product) return;
+
+    if (mode === 'pos') {
+      if ((product.stock_quantity || 0) <= 0) {
+        playScanChime('error');
+        setRecentNotification({
+          message: `"${product.name}" is currently Out of Stock!`,
+          type: 'error'
+        });
+        setTimeout(() => setRecentNotification(null), 3000);
+        return;
+      }
+      handleAddProductToCart(product, selectedQuantity, confidence);
+      return;
+    }
 
     playScanChime('success');
 
@@ -315,9 +376,10 @@ export default function ComputerVisionModal({
       ocrText: cleanText,
       barcode: detectedBarcode || '',
       features: currentFeatures,
-      inventoryProducts: products,
+      inventoryProducts: activeInventory,
       masterCatalogProducts: masterCatalogProducts,
-      customTrained: trainedTemplates
+      customTrained: trainedTemplates,
+      mode: mode
     });
     setMatchCandidates(matches);
     setIsEditingOcr(false);
@@ -332,8 +394,14 @@ export default function ComputerVisionModal({
         setUploadedImageObj(null);
       }
       if (!prev) {
-        const source = uploadedImageObj || canvasRef.current;
-        if (source) performDeepAnalysis(source);
+        // Prefer full-resolution video element for OCR (better than low-res canvas)
+        if (uploadedImageObj) {
+          performDeepAnalysis(uploadedImageObj);
+        } else if (videoRef.current && videoRef.current.readyState >= 2 && videoRef.current.videoWidth > 0) {
+          performDeepAnalysis(videoRef.current);
+        } else if (canvasRef.current) {
+          performDeepAnalysis(canvasRef.current);
+        }
       }
       return next;
     });
@@ -475,12 +543,12 @@ export default function ComputerVisionModal({
   const modalTitle = title || (
     mode === 'purchase_order'
       ? 'Vision Auto-Scan for Purchase Order'
-      : 'OpenCV & OCR Visual Scanner'
+      : 'OpenCV & OCR Visual Scanner (Inventory Catalog)'
   );
 
   const modalSubtitle = mode === 'purchase_order'
     ? 'Scan product or medicine box to auto-populate Company, Product Name, Category & Price'
-    : 'Recognizes medicines, packaged items, barcodes & produce';
+    : 'Scan product via camera or upload photo to match with store inventory catalog';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-slate-950/85 backdrop-blur-md animate-fadeIn">
@@ -499,7 +567,7 @@ export default function ComputerVisionModal({
               <div className="flex items-center gap-2">
                 <h3 className="text-base font-bold text-white tracking-tight">{modalTitle}</h3>
                 <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full border bg-emerald-500/20 text-emerald-400 border-emerald-500/40">
-                  {mode === 'purchase_order' ? 'PO Auto-Fill Active' : 'AI Multi-Modal Active'}
+                  {mode === 'purchase_order' ? 'PO Auto-Fill Active' : 'Inventory Catalog Scanner'}
                 </span>
               </div>
               <p className="text-xs text-slate-400">{modalSubtitle}</p>
@@ -718,8 +786,15 @@ export default function ComputerVisionModal({
                     <button
                       type="button"
                       onClick={() => {
-                        const source = uploadedImageObj || canvasRef.current;
-                        if (source) performDeepAnalysis(source);
+                        // Prefer full-resolution video element for OCR when live streaming
+                        // (canvas is only 480x360 which gives poor OCR on small/fine text)
+                        if (uploadedImageObj) {
+                          performDeepAnalysis(uploadedImageObj);
+                        } else if (!isFrozen && videoRef.current && videoRef.current.readyState >= 2 && videoRef.current.videoWidth > 0) {
+                          performDeepAnalysis(videoRef.current);
+                        } else if (canvasRef.current) {
+                          performDeepAnalysis(canvasRef.current);
+                        }
                       }}
                       disabled={isOcrProcessing}
                       className="px-3 py-1.5 rounded-xl bg-indigo-600/90 hover:bg-indigo-600 text-white font-semibold transition-all flex items-center space-x-1.5 shadow-sm disabled:opacity-50"
