@@ -68,15 +68,15 @@ export function playScanChime(type = 'success') {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TESSERACT.JS OCR LOADER & WORKER
+// TESSERACT.JS OCR LOADER & WORKER QUEUE
 // ─────────────────────────────────────────────────────────────────────────────
 let tesseractWorker = null;
 let isTesseractLoading = false;
+let ocrWorkerQueue = Promise.resolve();
 
 export async function initTesseractOCR() {
   if (tesseractWorker) return tesseractWorker;
   if (isTesseractLoading) {
-    // Wait for in-flight init
     return new Promise(resolve => {
       const check = setInterval(() => {
         if (tesseractWorker) {
@@ -115,144 +115,113 @@ export async function initTesseractOCR() {
 }
 
 /**
- * Recognizes text from an image or canvas using Tesseract OCR with
- * a dual-panel composite canvas:
- * - Panel 1 (Top): Normal contrast-enhanced grayscale (reads dark text on light backgrounds: ACME, batch, formula)
- * - Panel 2 (Bottom): Inverted & color-separated view (turns white-on-red "Lifil-A 50000" into sharp black text on white)
+ * Clean and normalize OCR recognized text:
+ * - Removes isolated symbols & gibberish
+ * - Deduplicates identical consecutive or repeated lines
+ * - Normalizes spacing
+ */
+export function cleanOcrText(rawText = '') {
+  if (!rawText) return '';
+  const lines = rawText
+    .split(/\r?\n/)
+    .map(line => line.replace(/[~`_=<>|\\\/]/g, ' ').replace(/\s+/g, ' ').trim())
+    .filter(line => {
+      if (!line) return false;
+      const cleanLetters = line.replace(/[^a-zA-Z0-9]/g, '');
+      if (cleanLetters.length < 2) return false;
+      return true;
+    });
+
+  const uniqueLines = [];
+  for (const l of lines) {
+    if (!uniqueLines.some(ul => ul.toLowerCase() === l.toLowerCase())) {
+      uniqueLines.push(l);
+    }
+  }
+  return uniqueLines.join('\n').trim();
+}
+
+/**
+ * Recognizes text from an image or canvas using Tesseract OCR.
+ * Uses sequential queue to prevent worker race conditions, and applies
+ * contrast stretching to preserve crisp fine-print on medicine packaging.
  */
 export async function recognizeTextFromImage(imageOrCanvas) {
-  try {
-    const worker = await initTesseractOCR();
-    if (!worker) return '';
+  // Chain through sequential worker queue to guarantee single-threaded safety
+  const executeOcr = async () => {
+    try {
+      const worker = await initTesseractOCR();
+      if (!worker) return '';
 
-    // Determine native source dimensions
-    const srcW = imageOrCanvas.naturalWidth || imageOrCanvas.videoWidth || imageOrCanvas.width || 800;
-    const srcH = imageOrCanvas.naturalHeight || imageOrCanvas.videoHeight || imageOrCanvas.height || 600;
+      // Determine native source dimensions
+      const srcW = imageOrCanvas.naturalWidth || imageOrCanvas.videoWidth || imageOrCanvas.width || 800;
+      const srcH = imageOrCanvas.naturalHeight || imageOrCanvas.videoHeight || imageOrCanvas.height || 600;
 
-    // Scale proportionally to preserve crisp text and aspect ratio
-    const maxDim = 1200;
-    const minDim = 640;
-    let scale = 1;
-    if (Math.max(srcW, srcH) > maxDim) {
-      scale = maxDim / Math.max(srcW, srcH);
-    } else if (Math.min(srcW, srcH) < minDim && Math.max(srcW, srcH) * (minDim / Math.min(srcW, srcH)) <= 1600) {
-      scale = minDim / Math.min(srcW, srcH);
-    }
-
-    const targetW = Math.max(360, Math.round(srcW * scale));
-    const targetH = Math.max(260, Math.round(srcH * scale));
-
-    // Create source canvas
-    const srcCanvas = document.createElement('canvas');
-    srcCanvas.width = targetW;
-    srcCanvas.height = targetH;
-    const srcCtx = srcCanvas.getContext('2d', { willReadFrequently: true });
-    srcCtx.imageSmoothingEnabled = true;
-    srcCtx.imageSmoothingQuality = 'high';
-    srcCtx.drawImage(imageOrCanvas, 0, 0, targetW, targetH);
-
-    const srcImgData = srcCtx.getImageData(0, 0, targetW, targetH);
-    const src = srcImgData.data;
-
-    // Build stacked composite canvas: Height = 2 * targetH
-    const compositeCanvas = document.createElement('canvas');
-    compositeCanvas.width = targetW;
-    compositeCanvas.height = targetH * 2;
-    const compCtx = compositeCanvas.getContext('2d', { willReadFrequently: true });
-    const compImgData = compCtx.createImageData(targetW, targetH * 2);
-    const cd = compImgData.data;
-
-    // Compute luminance histogram for dynamic range
-    const hist = new Int32Array(256);
-    let totalSamples = 0;
-    for (let i = 0; i < src.length; i += 8) {
-      const lum = Math.round(src[i] * 0.299 + src[i + 1] * 0.587 + src[i + 2] * 0.114);
-      hist[lum]++;
-      totalSamples++;
-    }
-
-    const p2Cutoff = Math.floor(totalSamples * 0.02);
-    const p98Cutoff = Math.floor(totalSamples * 0.98);
-    let p2 = 0, acc = 0;
-    while (p2 < 255 && acc < p2Cutoff) { acc += hist[p2]; p2++; }
-    let p98 = 255; acc = 0;
-    while (p98 > 0 && acc < (totalSamples - p98Cutoff)) { acc += hist[p98]; p98--; }
-    if (p98 <= p2) { p2 = 0; p98 = 255; }
-    const range = Math.max(35, p98 - p2);
-
-    for (let y = 0; y < targetH; y++) {
-      for (let x = 0; x < targetW; x++) {
-        const srcIdx = (y * targetW + x) * 4;
-        const r = src[srcIdx];
-        const g = src[srcIdx + 1];
-        const b = src[srcIdx + 2];
-        const lum = Math.round(r * 0.299 + g * 0.587 + b * 0.114);
-
-        // 1. TOP HALF: Standard contrast-stretched grayscale (normal polarity)
-        const norm = Math.max(0, Math.min(1, (lum - p2) / range));
-        const topVal = Math.round(Math.pow(norm, 0.85) * 255);
-        const topIdx = (y * targetW + x) * 4;
-        cd[topIdx] = topVal;
-        cd[topIdx + 1] = topVal;
-        cd[topIdx + 2] = topVal;
-        cd[topIdx + 3] = 255;
-
-        // 2. BOTTOM HALF: Color-Inverted Channel (banner isolation)
-        // For red/warm banners with white text: min(g, b) is low for red background and high for white text.
-        // Inverting min(g, b) produces black text (0) on a light background (220).
-        let botVal;
-        if (r > g + 20 && r > b + 20) {
-          const cMin = Math.min(g, b);
-          botVal = 255 - cMin;
-          botVal = botVal > 140 ? 255 : (botVal < 70 ? 0 : botVal);
-        } else if (b > r + 25 && b > g + 25) {
-          const cMin = Math.min(r, g);
-          botVal = 255 - cMin;
-          botVal = botVal > 140 ? 255 : (botVal < 70 ? 0 : botVal);
-        } else {
-          botVal = 255 - topVal;
-        }
-
-        const botIdx = ((y + targetH) * targetW + x) * 4;
-        cd[botIdx] = botVal;
-        cd[botIdx + 1] = botVal;
-        cd[botIdx + 2] = botVal;
-        cd[botIdx + 3] = 255;
+      // Scale proportionally: Keep resolution high enough for small medicine fine-print (up to 1600px)
+      const maxDim = 1600;
+      const minDim = 720;
+      let scale = 1;
+      if (Math.max(srcW, srcH) > maxDim) {
+        scale = maxDim / Math.max(srcW, srcH);
+      } else if (Math.min(srcW, srcH) < minDim && Math.max(srcW, srcH) * (minDim / Math.min(srcW, srcH)) <= 1600) {
+        scale = minDim / Math.min(srcW, srcH);
       }
-    }
-    compCtx.putImageData(compImgData, 0, 0);
 
-    const ret = await worker.recognize(compositeCanvas);
-    let text = (ret?.data?.text || '').trim();
+      const targetW = Math.max(480, Math.round(srcW * scale));
+      const targetH = Math.max(360, Math.round(srcH * scale));
 
-    // Fallback: If banner medicine brand was not recognized, crop and scan the inverted upper-half banner directly
-    if (!/lifil/i.test(text) && targetW >= 300) {
-      try {
-        const bannerCanvas = document.createElement('canvas');
-        const bw = Math.round(targetW * 0.75);
-        const bh = Math.round(targetH * 0.45);
-        const bx = Math.round(targetW * 0.1);
-        const by = Math.round(targetH * 0.1);
-        bannerCanvas.width = bw;
-        bannerCanvas.height = bh;
-        const bCtx = bannerCanvas.getContext('2d', { willReadFrequently: true });
-        // Crop from the bottom (inverted) half of the composite canvas
-        bCtx.drawImage(compositeCanvas, bx, by + targetH, bw, bh, 0, 0, bw, bh);
-        const bRet = await worker.recognize(bannerCanvas);
-        const bText = (bRet?.data?.text || '').trim();
-        if (bText) {
-          text = `${bText}\n${text}`.trim();
-        }
-      } catch (errBanner) {
-        // Fallback to composite text
+      // Create high-contrast canvas
+      const srcCanvas = document.createElement('canvas');
+      srcCanvas.width = targetW;
+      srcCanvas.height = targetH;
+      const srcCtx = srcCanvas.getContext('2d', { willReadFrequently: true });
+      srcCtx.imageSmoothingEnabled = true;
+      srcCtx.imageSmoothingQuality = 'high';
+      srcCtx.drawImage(imageOrCanvas, 0, 0, targetW, targetH);
+
+      const srcImgData = srcCtx.getImageData(0, 0, targetW, targetH);
+      const src = srcImgData.data;
+
+      // Compute luminance histogram for dynamic range contrast stretch
+      const hist = new Int32Array(256);
+      let totalSamples = 0;
+      for (let i = 0; i < src.length; i += 8) {
+        const lum = Math.round(src[i] * 0.299 + src[i + 1] * 0.587 + src[i + 2] * 0.114);
+        hist[lum]++;
+        totalSamples++;
       }
-    }
 
-    return text;
-  } catch (err) {
-    console.warn('OCR recognition error:', err);
-    return '';
-  }
+      const p1Cutoff = Math.floor(totalSamples * 0.01);
+      const p99Cutoff = Math.floor(totalSamples * 0.99);
+      let p1 = 0, acc = 0;
+      while (p1 < 255 && acc < p1Cutoff) { acc += hist[p1]; p1++; }
+      let p99 = 255; acc = 0;
+      while (p99 > 0 && acc < (totalSamples - p99Cutoff)) { acc += hist[p99]; p99--; }
+      if (p99 <= p1) { p1 = 0; p99 = 255; }
+      const range = Math.max(30, p99 - p1);
+
+      for (let i = 0; i < src.length; i += 4) {
+        const lum = Math.round(src[i] * 0.299 + src[i + 1] * 0.587 + src[i + 2] * 0.114);
+        const norm = Math.max(0, Math.min(1, (lum - p1) / range));
+        const val = Math.round(Math.pow(norm, 0.90) * 255);
+        src[i] = val;
+        src[i + 1] = val;
+        src[i + 2] = val;
+      }
+      srcCtx.putImageData(srcImgData, 0, 0);
+
+      const ret = await worker.recognize(srcCanvas);
+      const rawText = ret?.data?.text || '';
+      return cleanOcrText(rawText);
+    } catch (err) {
+      console.warn('OCR recognition error:', err);
+      return '';
+    }
+  };
+
+  const currentTask = ocrWorkerQueue.then(executeOcr).catch(() => '');
+  ocrWorkerQueue = currentTask;
+  return currentTask;
 }
 
 /**
@@ -805,7 +774,12 @@ export function renderVisionOverlay(canvas, videoElement, mode = 'standard') {
 // ─────────────────────────────────────────────────────────────────────────────
 // KNOWN PHARMACEUTICAL & CONSUMER MANUFACTURERS FOR VISION IDENTIFICATION
 // ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// KNOWN PHARMACEUTICAL & CONSUMER MANUFACTURERS FOR VISION IDENTIFICATION
+// ─────────────────────────────────────────────────────────────────────────────
 export const KNOWN_MANUFACTURERS = [
+  { key: 'lundbeck', name: 'H. Lundbeck A/S', aliases: ['lundbeck', 'h lundbeck', 'h. lundbeck'] },
+  { key: 'rottendorf', name: 'Rottendorf Pharma GmbH', aliases: ['rottendorf', 'rottendorf pharma'] },
   { key: 'acme', name: 'The ACME Laboratories Ltd.', aliases: ['acme', 'a c m e', 'acme laboratories', 'the acme laboratories'] },
   { key: 'square', name: 'Square Pharmaceuticals PLC', aliases: ['square', 'square pharma', 'square pharmaceuticals'] },
   { key: 'beximco', name: 'Beximco Pharmaceuticals Ltd.', aliases: ['beximco', 'beximco pharma'] },
@@ -824,6 +798,12 @@ export const KNOWN_MANUFACTURERS = [
   { key: 'ziska', name: 'Ziska Pharmaceuticals Ltd.', aliases: ['ziska'] },
   { key: 'delta', name: 'Delta Pharma Limited', aliases: ['delta pharma'] },
   { key: 'general', name: 'General Pharmaceuticals Ltd.', aliases: ['general pharma'] },
+  { key: 'novartis', name: 'Novartis AG', aliases: ['novartis'] },
+  { key: 'pfizer', name: 'Pfizer Inc.', aliases: ['pfizer'] },
+  { key: 'gsk', name: 'GlaxoSmithKline PLC', aliases: ['gsk', 'glaxosmithkline'] },
+  { key: 'sanofi', name: 'Sanofi S.A.', aliases: ['sanofi'] },
+  { key: 'roche', name: 'F. Hoffmann-La Roche AG', aliases: ['roche', 'hoffmann-la roche'] },
+  { key: 'astrazeneca', name: 'AstraZeneca PLC', aliases: ['astrazeneca'] },
   { key: 'unilever', name: 'Unilever Bangladesh', aliases: ['unilever'] },
   { key: 'nestle', name: 'Nestle Bangladesh', aliases: ['nestle'] },
   { key: 'pran', name: 'PRAN-RFL Group', aliases: ['pran'] }
@@ -841,6 +821,68 @@ export function findKnownCompanyInText(rawText = '') {
     }
   }
   return null;
+}
+
+/**
+ * Robust extraction of pharmaceutical company/manufacturer/marketer from OCR text.
+ * Detects patterns like:
+ * - "Marketed by H. Lundbeck A/S, Copenhagen, Denmark"
+ * - "Manufactured by Rottendorf Pharma Gmbh, Ennigerloh, Germany"
+ * - "Mfg. by: The ACME Laboratories Ltd."
+ * - Company names ending in Pharma, Pharmaceuticals, Laboratories, Ltd, PLC, GmbH, A/S
+ */
+export function extractCompanyFromText(rawText = '') {
+  if (!rawText) return { primaryCompany: '', candidateCompanies: [] };
+  const text = rawText.replace(/\r/g, ' ');
+  const candidateCompanies = [];
+
+  const addCandidate = (name) => {
+    if (!name) return;
+    let clean = name.trim()
+      .replace(/[\n\r]+/g, ' ')
+      .replace(/^[\s\:\-\,\.]+|[\s\:\-\,\.]+$/g, '');
+    // Strip trailing city/country noise like ", Copenhagen, Denmark" or ", Ennigerloh, Germany"
+    clean = clean.replace(/[\,\s]+(?:copenhagen|denmark|germany|ennigerloh|bangladesh|dhaka|india|usa|uk|london|france|switzerland|karachi|pakistan|japan|italy)[\s\S]*$/i, '').trim();
+    if (clean.length >= 3 && clean.length <= 60 && !/^(the|a|an|medicine|pack|box|tablets?|capsules?)$/i.test(clean)) {
+      if (!candidateCompanies.some(c => c.toLowerCase() === clean.toLowerCase())) {
+        candidateCompanies.push(clean);
+      }
+    }
+  };
+
+  // 1. Prefix-based extraction (Marketed by, Manufactured by, Mfg by, Mfd by, Distributed by)
+  const prefixPatterns = [
+    /(?:marketed\s*(?:in\s+[a-zA-Z\s]+)?by|marketed\s*by|marketer)[\s\:\-]+([a-zA-Z0-9\s\.\,\'\&\-]+?)(?:\,|\.|\n|copenhagen|germany|bangladesh|dhaka|india|usa|\d{4,}|$)/i,
+    /(?:manufactured\s*(?:in\s+[a-zA-Z\s]+)?by|mfg\.?\s*by|mfd\.?\s*by|produced\s*by|packed\s*by|imported\s*by)[\s\:\-]+([a-zA-Z0-9\s\.\,\'\&\-]+?)(?:\,|\.|\n|ennigerloh|germany|bangladesh|dhaka|india|usa|\d{4,}|$)/i
+  ];
+
+  for (const pat of prefixPatterns) {
+    const match = text.match(pat);
+    if (match && match[1]) {
+      addCandidate(match[1]);
+    }
+  }
+
+  // 2. Search against known manufacturer registry
+  const known = findKnownCompanyInText(rawText);
+  if (known) {
+    addCandidate(known.name);
+  }
+
+  // 3. Suffix matching for pharma corporate forms
+  const suffixMatches = text.match(/\b([A-Z][a-zA-Z0-9\.\'\&\-\s]{2,35}?\s*(?:Pharma(?:ceuticals)?|Laboratories|Labs?|Healthcare|Therapeutics|PLC|Ltd|GmbH|A\/S|S\.A\.|Inc|Corp))\b/g);
+  if (suffixMatches) {
+    for (const sm of suffixMatches) {
+      if (!/^(?:prescription\s*only|keep\s*out|store\s*below|for\s*external)/i.test(sm.trim())) {
+        addCandidate(sm);
+      }
+    }
+  }
+
+  return {
+    primaryCompany: candidateCompanies.length > 0 ? candidateCompanies[0] : '',
+    candidateCompanies
+  };
 }
 
 function hasWordBoundary(text, word) {
@@ -886,15 +928,17 @@ function formatExpiryDate(rawExp) {
 
 /**
  * Intelligent parser that extracts medicine packaging details:
- * Brand name, Company/Manufacturer, Strength, Category/Form, MRP Price, Batch, Expiry
+ * Brand name, Strength, Generic / Active Ingredient, Company/Manufacturer,
+ * Dosage Form / Category, Pack Size, Unit, MRP Price, Batch, Expiry
  */
 export function parseMedicinePackaging(rawText = '') {
   if (!rawText) return null;
   const clean = rawText.replace(/\r/g, '');
   const lines = clean.split('\n').map(l => l.trim()).filter(Boolean);
 
-  // 1. Manufacturer / Company
-  const foundCompany = findKnownCompanyInText(clean);
+  // 1. Manufacturer / Marketer Company Extraction
+  const companyInfo = extractCompanyFromText(clean);
+  const foundCompany = companyInfo.primaryCompany || (findKnownCompanyInText(clean)?.name || '');
 
   // 2. Dosage Form & Category
   let category = 'Medicine';
@@ -918,7 +962,7 @@ export function parseMedicinePackaging(rawText = '') {
 
   // 3. Batch Number
   let batch = '';
-  const batchMatch = clean.match(/(?:batch|b\.?\s*no)[\.\:\s]*([A-Z0-9\-]+)/i);
+  const batchMatch = clean.match(/(?:batch|b\.?\s*no|lot)[\.\:\s]*([A-Z0-9\-]+)/i);
   if (batchMatch) {
     batch = batchMatch[1].trim();
   }
@@ -940,15 +984,37 @@ export function parseMedicinePackaging(rawText = '') {
     }
   }
 
-  // 6. Strength / Dosage (e.g. 50000 IU, 500mg, 20mg, 10mg)
+  // 6. Strength / Dosage (e.g. 50000 IU, 500mg, 20mg, 10mg, 65mg)
   let strength = '';
   const strengthMatch = clean.match(/(\d+(?:\.\d+)?\s*(?:iu|mg|gm|g|mcg|ml|iu\/ml|bp|usp))\b/i);
   if (strengthMatch) {
     strength = strengthMatch[1].trim();
   }
 
-  // 7. Detect Medicine Brand Name
+  // 7. Pack Size & Unit (e.g. "56 tablets", "10 capsules")
+  let packSize = '';
+  let unitSize = '';
+  const detectedUnit = category === 'Capsule' ? 'capsule' : (category === 'Tablet' ? 'tablet' : 'piece');
+  const packMatch = clean.match(/(\d+)\s*(?:tablets?|capsules?|tabs?|caps?|vials?|bottles?|strips?|pieces?|sachets?)/i);
+  if (packMatch) {
+    packSize = packMatch[1];
+    unitSize = `${packSize} ${category.toLowerCase()}s`;
+  }
+
+  // 8. Generic / Active Ingredient (e.g. "(Memantine hydrochloride Mz.)" or "(Paracetamol)")
+  let genericName = '';
+  const genericMatch = clean.match(/(?:[\(\'\"\[])([A-Za-z0-9\s\.\,\+\-]{4,60}?(?:\s*(?:hydrochloride|maleate|potassium|sodium|hcl|bp|usp|ip|mz\.?|hydrate))?)(?:[\)\'\"\]])/i);
+  if (genericMatch && genericMatch[1]) {
+    const gen = genericMatch[1].replace(/mz\.?$/i, '').trim();
+    if (gen.length >= 4 && !/^(tablets?|capsules?|prescription)/i.test(gen)) {
+      genericName = gen;
+    }
+  }
+
+  // 9. Detect Medicine Brand Name
   const noisePatterns = [
+    /^pak\.?\s*reg/i,
+    /^mfg\.?\s*lic/i,
     /^prescription\s*only/i,
     /^for\s*external\s*use/i,
     /^keep\s*out\s*of/i,
@@ -963,19 +1029,15 @@ export function parseMedicinePackaging(rawText = '') {
     /^\d+\s*x\s*\d+/i,
     /^dar\s*no/i,
     /^lic\s*no/i,
-    /^acme$/i,
-    /^square$/i,
-    /^beximco$/i
+    /^(?:manufactured|marketed|mfd|packed|distributed)\s*by/i,
+    /^(?:tablets?|capsules?|syrup|suspension|drops?|injection)$/i
   ];
 
   let candidateName = '';
 
-  // Direct priority brand / formula recognition from packaging
+  // Direct priority brand recognition
   if (/\blifil\b/i.test(clean) || (/\bvitamin\s*a\b/i.test(clean) && (/\b50000\b/i.test(clean) || /\b50k\b/i.test(clean)))) {
     candidateName = 'Lifil-A 50000';
-    if (!foundCompany) {
-      foundCompany = { key: 'acme', name: 'The ACME Laboratories Ltd.' };
-    }
     category = 'Capsule';
   } else if (/\bnapa\b/i.test(clean)) {
     candidateName = /\bextra\b/i.test(clean) ? 'Napa Extra' : (/\brapid\b/i.test(clean) ? 'Napa Rapid' : 'Napa 500mg');
@@ -989,27 +1051,24 @@ export function parseMedicinePackaging(rawText = '') {
     candidateName = 'Pantonix 20mg';
   }
 
-  // If no known priority brand was matched, search lines with strict gibberish filtering
+  // Check for Brand + Strength pattern (e.g. "Ebixa 10 mg")
   if (!candidateName) {
-    function isGibberish(str) {
-      if (!str || str.length < 3) return true;
-      const cleanLetters = str.replace(/[^a-zA-Z]/g, '');
-      if (cleanLetters.length < 3) return true;
-      if (cleanLetters.length / str.length < 0.65) return true;
-      if (/[~`_=<>|\\\/]/.test(str)) return true;
-      const words = str.split(/\s+/);
-      // Reject repeated single/two-letter noise like "Spe BARA ~ Mc pe fg"
-      if (words.length >= 3 && words.filter(w => w.length <= 2).length >= words.length * 0.5) return true;
-      return false;
+    const brandWithStrength = clean.match(/\b([A-Z][a-zA-Z0-9\-\'\s]{2,20}?\s+\d+(?:\.\d+)?\s*(?:mg|gm|g|mcg|ml|iu))\b/i);
+    if (brandWithStrength && !noisePatterns.some(p => p.test(brandWithStrength[1].trim()))) {
+      candidateName = brandWithStrength[1].trim();
     }
+  }
 
+  // If not matched, scan lines with noise filtering
+  if (!candidateName) {
     for (const line of lines) {
       const trimmed = line.replace(/[^a-zA-Z0-9\-\s\.]/g, ' ').replace(/\s+/g, ' ').trim();
       if (trimmed.length < 3 || trimmed.length > 35) continue;
       if (noisePatterns.some(p => p.test(trimmed))) continue;
-      if (isGibberish(trimmed)) continue;
+      if (genericName && trimmed.toLowerCase().includes(genericName.toLowerCase())) continue;
+      if (foundCompany && trimmed.toLowerCase().includes(foundCompany.toLowerCase())) continue;
 
-      if (/[a-zA-Z]{3,}/.test(trimmed)) {
+      if (/^[a-zA-Z]{3,}/.test(trimmed)) {
         candidateName = trimmed;
         break;
       }
@@ -1017,17 +1076,22 @@ export function parseMedicinePackaging(rawText = '') {
   }
 
   let finalProductName = candidateName;
-  if (finalProductName && category && !finalProductName.toLowerCase().includes(category.toLowerCase())) {
-    finalProductName = `${finalProductName} ${category}`;
+  if (finalProductName && strength && !finalProductName.toLowerCase().includes(strength.toLowerCase())) {
+    finalProductName = `${finalProductName} ${strength}`;
   }
 
   return {
-    productName: finalProductName || candidateName,
+    productName: finalProductName || candidateName || (genericName ? `${genericName} ${strength || ''}`.trim() : 'Scanned Medicine Box'),
     rawBrand: candidateName,
-    company: foundCompany ? foundCompany.name : '',
+    genericName,
+    company: foundCompany,
+    candidateCompanies: companyInfo.candidateCompanies,
     category,
-    price,
-    costPrice: price ? parseFloat((price * 0.85).toFixed(2)) : null,
+    packSize,
+    unit: detectedUnit,
+    unitSize,
+    price: price || 35.00,
+    costPrice: price ? parseFloat((price * 0.85).toFixed(2)) : 29.75,
     batch,
     expiry,
     strength
@@ -1036,7 +1100,10 @@ export function parseMedicinePackaging(rawText = '') {
 
 /**
  * Matches extracted OCR text, Barcode, and Visual Features against store inventory
- * AND Super Admin Supplier Products Catalog
+ * AND Super Admin Supplier Products Catalog.
+ * 
+ * Strict Brand Matching: Generic words (mg, ml, tablet, capsule, etc.) alone
+ * NEVER produce a match. The distinctive brand token MUST be present in OCR text!
  */
 export function matchProductComprehensive({
   ocrText = '',
@@ -1046,12 +1113,26 @@ export function matchProductComprehensive({
   masterCatalogProducts = [],
   customTrained = []
 }) {
-  if ((!inventoryProducts || inventoryProducts.length === 0) && (!masterCatalogProducts || masterCatalogProducts.length === 0)) return [];
-
   const candidates = [];
   const normalizedOcr = (ocrText || '').toLowerCase().replace(/[^a-z0-9\s\-]/g, ' ');
-  const ocrWords = normalizedOcr.split(/[\s\-]+/).filter(w => w.length >= 2);
-  const detectedCompany = findKnownCompanyInText(ocrText);
+  const companyInfo = extractCompanyFromText(ocrText);
+  const detectedCompany = companyInfo.primaryCompany;
+
+  // Generic modifiers that NEVER count as distinctive brand names
+  const GENERIC_MODIFIERS = new Set([
+    'tablet', 'tablets', 'tab', 'tabs', 'capsule', 'capsules', 'cap', 'caps',
+    'syrup', 'suspension', 'drops', 'drop', 'mg', 'ml', 'gm', 'g', 'mcg', 'iu',
+    'plus', 'extra', 'forte', 'xr', 'sr', 'ds', 'susp', 'oral', 'solution',
+    'piece', 'box', 'strip', 'pack', 'for', 'and', 'with', 'the'
+  ]);
+
+  // Helper to extract core brand tokens (excluding generic modifiers and pure numbers)
+  const extractBrandTokens = (name = '') => {
+    return name
+      .toLowerCase()
+      .split(/[\s\-\_\(\)\/]+/)
+      .filter(t => t.length >= 2 && !GENERIC_MODIFIERS.has(t) && !/^\d+$/.test(t) && /[a-z]{2,}/i.test(t));
+  };
 
   // 1. BARCODE / SKU EXACT MATCH (100% Confidence)
   if (barcode) {
@@ -1070,57 +1151,69 @@ export function matchProductComprehensive({
   }
 
   // 2. OPTICAL CHARACTER RECOGNITION (OCR) MATCHING AGAINST LOCAL INVENTORY
-  if (ocrWords.length > 0 && inventoryProducts.length > 0) {
+  if (normalizedOcr.trim().length > 0 && inventoryProducts.length > 0) {
     for (const prod of inventoryProducts) {
       const prodName = (prod.name || '').toLowerCase();
       const prodSku = (prod.sku || '').toLowerCase();
-      const prodCategory = (prod.category || '').toLowerCase();
       const prodSupplier = (prod.supplier_name || '').toLowerCase();
 
       let score = 0;
       let matchReason = '';
 
-      // Check for exact product name inside OCR text using whole phrase/word match
+      // Check exact full phrase match
       if (hasWordBoundary(normalizedOcr, prodName)) {
         score = 98;
         matchReason = `Optical Brand Name Match: "${prod.name}"`;
       } else {
-        const nameTokens = prodName.split(/[\s\-\_\(\)\/]+/).filter(t => t.length >= 2);
-        // Only consider meaningful alphabetic tokens as brand keywords
-        const alphaTokens = nameTokens.filter(t => /[a-z]{2,}/i.test(t));
-        let alphaMatches = 0;
+        const brandTokens = extractBrandTokens(prod.name);
 
-        for (const token of alphaTokens) {
-          if (hasWordBoundary(normalizedOcr, token)) {
-            alphaMatches++;
+        // Core Brand Validation: AT LEAST one core distinctive brand token MUST be present
+        if (brandTokens.length > 0) {
+          let matchedTokens = 0;
+          for (const token of brandTokens) {
+            if (hasWordBoundary(normalizedOcr, token)) {
+              matchedTokens++;
+            }
           }
-        }
 
-        if (alphaTokens.length > 0 && alphaMatches > 0) {
-          score = Math.round(75 + (alphaMatches / alphaTokens.length) * 20);
-          matchReason = `Optical Text Match: ${alphaMatches}/${alphaTokens.length} keywords`;
+          // If the core brand does NOT match, score remains 0 (prevents Ace-plus matching Ebixa!)
+          if (matchedTokens > 0) {
+            score = 78 + Math.round((matchedTokens / brandTokens.length) * 12);
+            matchReason = `Optical Brand Match: ${matchedTokens}/${brandTokens.length} brand words`;
+
+            // Check dosage strength match (e.g. 10mg, 500mg)
+            const strengthMatch = prodName.match(/(\d+(?:\.\d+)?\s*(?:iu|mg|gm|g|mcg|ml))\b/i);
+            if (strengthMatch && normalizedOcr.includes(strengthMatch[1].toLowerCase())) {
+              score = Math.min(98, score + 8);
+              matchReason += ` • Strength Confirmed: ${strengthMatch[1]}`;
+            }
+
+            // Check form match (tablet, capsule)
+            if (prod.category && hasWordBoundary(normalizedOcr, prod.category.toLowerCase())) {
+              score = Math.min(99, score + 4);
+            }
+          }
         } else if (prodSku && hasWordBoundary(normalizedOcr, prodSku)) {
           score = 95;
           matchReason = `SKU code match: ${prod.sku}`;
         }
       }
 
-      // Validate manufacturer consistency
+      // Manufacturer consistency validation
       if (score >= 60 && prodSupplier) {
         if (detectedCompany) {
-          const isSame = prodSupplier.includes(detectedCompany.key) ||
-            detectedCompany.name.toLowerCase().includes(prodSupplier);
+          const isSame = prodSupplier.includes(detectedCompany.toLowerCase()) ||
+            detectedCompany.toLowerCase().includes(prodSupplier);
           if (isSame) {
-            score = Math.min(100, score + 12);
+            score = Math.min(100, score + 10);
             matchReason += ` • Company Confirmed: ${prod.supplier_name}`;
           } else {
-            // Mismatch penalty
             score = Math.max(0, score - 35);
           }
         }
       }
 
-      if (score >= 60) {
+      if (score >= 70) {
         if (!candidates.some(c => c.product.id === prod.id)) {
           candidates.push({
             product: prod,
@@ -1135,93 +1228,57 @@ export function matchProductComprehensive({
     }
   }
 
-  // 3. OPTICAL CHARACTER RECOGNITION MATCHING AGAINST SUPER ADMIN "SUPPLIER PRODUCTS CATALOG"
-  if (ocrWords.length > 0 && masterCatalogProducts.length > 0) {
-    const genericModifiers = new Set(['tablet', 'tablets', 'capsule', 'capsules', 'syrup', 'suspension', 'drops', 'mg', 'ml', 'gm', 'injection', 'inhaler', 'cream', 'gel', 'ointment']);
-
+  // 3. OPTICAL CHARACTER RECOGNITION MATCHING AGAINST SUPER ADMIN CATALOG
+  if (normalizedOcr.trim().length > 0 && masterCatalogProducts.length > 0) {
     for (const masterItem of masterCatalogProducts) {
       const mName = (masterItem.product_name || '').toLowerCase().trim();
       const mSupplier = (masterItem.supplier_name || '').toLowerCase().trim();
-
       if (!mName) continue;
 
       let score = 0;
       let matchReason = '';
 
-      const tokens = mName.split(/[\s\-\_\(\)\/]+/).filter(t => t.length >= 2);
-      // Valid brand token MUST have at least 2 letters (pure numbers like 50, 500, 20 are dosages, NEVER brand names!)
-      const brandToken = tokens.find(t => !genericModifiers.has(t) && /[a-z]{2,}/i.test(t));
-
-      // Priority check for formula or brand:
-      const isVitaminA50k = (hasWordBoundary(normalizedOcr, 'vitamin') || hasWordBoundary(normalizedOcr, 'vit')) &&
-        (hasWordBoundary(normalizedOcr, '50000') || normalizedOcr.includes('50000'));
-
-      if (hasWordBoundary(normalizedOcr, 'lifil') && mName.includes('lifil')) {
-        score = 99;
-        matchReason = `Optical Brand Match: "${masterItem.product_name}" (${masterItem.supplier_name})`;
-      } else if (isVitaminA50k && mName.includes('lifil')) {
-        score = 98;
-        matchReason = `Formula & Strength Match: "Vitamin A 50000 IU" -> "${masterItem.product_name}" (${masterItem.supplier_name})`;
-      }
-      // Exact full name match in OCR text (e.g. "Lifil-A 50000" or "Napa Extra")
-      else if (hasWordBoundary(normalizedOcr, mName)) {
+      if (hasWordBoundary(normalizedOcr, mName)) {
         score = 98;
         matchReason = `Catalog Match: "${masterItem.product_name}" (${masterItem.supplier_name || 'Verified Supplier'})`;
-      } 
-      // Primary brand token match (e.g. "lifil" from "Lifil-A 50000 Capsule")
-      else if (brandToken && hasWordBoundary(normalizedOcr, brandToken)) {
-        let matchedModifierCount = 0;
-        let totalModifiers = 0;
-        for (const t of tokens) {
-          if (t !== brandToken) {
-            totalModifiers++;
-            if (hasWordBoundary(normalizedOcr, t)) {
-              matchedModifierCount++;
+      } else {
+        const brandTokens = extractBrandTokens(mName);
+        if (brandTokens.length > 0) {
+          let matchedTokens = 0;
+          for (const token of brandTokens) {
+            if (hasWordBoundary(normalizedOcr, token)) {
+              matchedTokens++;
+            }
+          }
+
+          if (matchedTokens > 0) {
+            score = 78 + Math.round((matchedTokens / brandTokens.length) * 12);
+            matchReason = `Catalog Brand Match: "${masterItem.product_name}"`;
+
+            const strengthMatch = mName.match(/(\d+(?:\.\d+)?\s*(?:iu|mg|gm|g|mcg|ml))\b/i);
+            if (strengthMatch && normalizedOcr.includes(strengthMatch[1].toLowerCase())) {
+              score = Math.min(98, score + 8);
+              matchReason += ` • Strength Confirmed: ${strengthMatch[1]}`;
             }
           }
         }
-        score = 82 + (totalModifiers > 0 ? Math.round((matchedModifierCount / totalModifiers) * 16) : 8);
-        matchReason = `Catalog Brand Match: "${masterItem.product_name}" (${masterItem.supplier_name || 'Verified Supplier'})`;
-      } else {
-        // Purely alphabetic keyword matching (must match at least 60% of brand words)
-        const alphaTokens = tokens.filter(t => /[a-z]{2,}/i.test(t) && !genericModifiers.has(t));
-        let alphaMatches = 0;
-        for (const t of alphaTokens) {
-          if (hasWordBoundary(normalizedOcr, t)) {
-            alphaMatches++;
-          }
-        }
-        if (alphaTokens.length > 0 && alphaMatches >= Math.ceil(alphaTokens.length * 0.6)) {
-          score = Math.round(70 + (alphaMatches / alphaTokens.length) * 20);
-          matchReason = `Catalog Keyword Match: "${masterItem.product_name}" (${masterItem.supplier_name || ''})`;
-        }
       }
 
-      // Company verification and mismatch adjustment
       if (score >= 60 && mSupplier) {
         if (detectedCompany) {
-          const isSame = mSupplier.includes(detectedCompany.key) ||
-            detectedCompany.name.toLowerCase().includes(mSupplier);
+          const isSame = mSupplier.includes(detectedCompany.toLowerCase()) ||
+            detectedCompany.toLowerCase().includes(mSupplier);
           if (isSame) {
-            score = Math.min(100, score + 15);
+            score = Math.min(100, score + 10);
             matchReason += ` • Company Confirmed: ${masterItem.supplier_name}`;
           } else {
-            // Mismatched major supplier: penalty to prevent wrong product selection
             score = Math.max(0, score - 35);
-          }
-        } else {
-          const supTokens = mSupplier.split(/[\s\-\_\(\)\,\.]+/).filter(t => t.length >= 3 && !['ltd', 'plc', 'pharmaceuticals', 'laboratories', 'industry', 'limited'].includes(t));
-          if (supTokens.some(st => hasWordBoundary(normalizedOcr, st))) {
-            score = Math.min(100, score + 12);
-            matchReason += ` • Company Confirmed: ${masterItem.supplier_name}`;
           }
         }
       }
 
       if (score >= 70) {
-        // Look up if shop already has this product in inventory
         const existingLocal = inventoryProducts.find(p => (p.name || '').toLowerCase() === mName);
-
         const defaultPrice = masterItem.price ? parseFloat(masterItem.price) : 35;
         const defaultCost = masterItem.cost_price ? parseFloat(masterItem.cost_price) : (defaultPrice * 0.85);
 
@@ -1244,10 +1301,6 @@ export function matchProductComprehensive({
           if (score > candidates[exists].confidence || !candidates[exists].product.supplier_name) {
             candidates[exists].product.supplier_name = combinedProduct.supplier_name;
             candidates[exists].product.category = combinedProduct.category;
-            candidates[exists].product.unit = combinedProduct.unit;
-            candidates[exists].product.unit_size = combinedProduct.unit_size;
-            candidates[exists].product.price = combinedProduct.price;
-            candidates[exists].product.cost_price = combinedProduct.cost_price;
             candidates[exists].confidence = Math.max(candidates[exists].confidence, score);
             candidates[exists].reason = matchReason;
           }
@@ -1265,39 +1318,56 @@ export function matchProductComprehensive({
     }
   }
 
-  // 4. SMART MEDICINE PACKAGING FALLBACK (Dynamic Box Auto-Detection)
-  // If no existing catalog product had a confident brand match (>= 80%), but OCR detected a medicine box
+  // 4. SMART MEDICINE PACKAGING PARSER (Dynamic Box Detection)
+  // If no existing catalog or inventory product had a strong brand match (>= 80%),
+  // or if OCR extracted a full medicine box with company/brand
   const hasConfidentMatch = candidates.some(c => c.confidence >= 80);
-  if (!hasConfidentMatch && ocrText) {
+  if (!hasConfidentMatch && ocrText.trim().length > 0) {
     const boxInfo = parseMedicinePackaging(ocrText);
     if (boxInfo && boxInfo.productName) {
-      const defaultSp = boxInfo.price || 35.00;
-      const defaultCp = boxInfo.costPrice || parseFloat((defaultSp * 0.85).toFixed(2));
-      const detectedSupplier = boxInfo.company || (detectedCompany ? detectedCompany.name : 'Verified Supplier');
+      const detectedSupplier = boxInfo.company || detectedCompany || 'Verified Supplier';
 
       const boxProduct = {
         id: null,
         name: boxInfo.productName,
+        generic_name: boxInfo.genericName || '',
         supplier_name: detectedSupplier,
+        candidate_suppliers: boxInfo.candidateCompanies || [],
         category: boxInfo.category || 'Medicine',
-        price: defaultSp,
-        cost_price: defaultCp,
+        price: boxInfo.price || 35.00,
+        cost_price: boxInfo.costPrice || 29.75,
         sku: boxInfo.batch || '',
         expiry_date: boxInfo.expiry || '',
         stock_quantity: 0,
-        unit: boxInfo.category === 'Capsule' ? 'box' : 'piece',
+        unit: boxInfo.unit || 'piece',
+        unit_size: boxInfo.unitSize || '',
         is_new: true,
         is_master_catalog: false
       };
 
       candidates.unshift({
         product: boxProduct,
-        confidence: boxInfo.company ? 94 : 86,
+        confidence: boxInfo.company ? 93 : 86,
         matchType: 'box_scan',
-        reason: `Medicine Box Detected: "${boxInfo.productName}" • Company: ${detectedSupplier}${boxInfo.price ? ` • MRP: ৳${boxInfo.price.toFixed(2)}` : ''}`,
+        reason: `Medicine Packaging Detected: "${boxInfo.productName}" • Company: ${detectedSupplier}${boxInfo.genericName ? ` (${boxInfo.genericName})` : ''}`,
         colorName: detectedSupplier,
         icon: boxInfo.category === 'Capsule' ? '💊' : '📦'
       });
+
+      // If multiple companies were detected on the packaging (e.g. Rottendorf Pharma as manufacturer & Lundbeck as marketer)
+      if (boxInfo.candidateCompanies && boxInfo.candidateCompanies.length > 1) {
+        for (let i = 1; i < boxInfo.candidateCompanies.length; i++) {
+          const altCompany = boxInfo.candidateCompanies[i];
+          candidates.push({
+            product: { ...boxProduct, supplier_name: altCompany },
+            confidence: 88,
+            matchType: 'box_scan_alt',
+            reason: `Alternate Manufacturer/Marketer: "${altCompany}"`,
+            colorName: altCompany,
+            icon: '🏢'
+          });
+        }
+      }
     }
   }
 

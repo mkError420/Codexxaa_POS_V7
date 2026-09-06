@@ -1247,8 +1247,29 @@ export default function Suppliers() {
   // Helper to extract known pharmaceutical/manufacturing company name from OCR text
   const findCompanyInText = (text = '') => {
     if (!text) return '';
-    const lower = text.toLowerCase();
+    const cleanText = text.replace(/\r/g, ' ');
+    const lower = cleanText.toLowerCase();
+
+    // 1. Dynamic regex for "Marketed by", "Manufactured by", "Mfg by", "Mfd by", "Packed by", "Distributed by"
+    const prefixPatterns = [
+      /(?:marketed\s*(?:in\s+[a-zA-Z\s]+)?by|marketed\s*by|marketer)[\s\:\-]+([a-zA-Z0-9\s\.\,\'\&\-]+?)(?:\,|\.|\n|copenhagen|denmark|germany|bangladesh|dhaka|india|usa|\d{4,}|$)/i,
+      /(?:manufactured\s*(?:in\s+[a-zA-Z\s]+)?by|mfg\.?\s*by|mfd\.?\s*by|produced\s*by|packed\s*by|imported\s*by)[\s\:\-]+([a-zA-Z0-9\s\.\,\'\&\-]+?)(?:\,|\.|\n|ennigerloh|germany|bangladesh|dhaka|india|usa|\d{4,}|$)/i
+    ];
+
+    for (const pat of prefixPatterns) {
+      const match = cleanText.match(pat);
+      if (match && match[1]) {
+        let clean = match[1].trim().replace(/^[\s\:\-\,\.]+|[\s\:\-\,\.]+$/g, '');
+        clean = clean.replace(/[\,\s]+(?:copenhagen|denmark|germany|ennigerloh|bangladesh|dhaka|india|usa|uk|london|france|switzerland|karachi|pakistan|japan|italy)[\s\S]*$/i, '').trim();
+        if (clean.length >= 3 && clean.length <= 60 && !/^(the|a|an|medicine|pack|box|tablets?|capsules?)$/i.test(clean)) {
+          return clean;
+        }
+      }
+    }
+
     const companyMappings = [
+      { key: 'lundbeck', name: 'H. Lundbeck A/S' },
+      { key: 'rottendorf', name: 'Rottendorf Pharma GmbH' },
       { key: 'beximco', name: 'Beximco Pharmaceuticals Ltd.' },
       { key: 'square', name: 'Square Pharmaceuticals PLC' },
       { key: 'incepta', name: 'Incepta Pharmaceuticals Ltd.' },
@@ -1263,6 +1284,13 @@ export default function Suppliers() {
       { key: 'drug international', name: 'Drug International Ltd.' },
       { key: 'ibn sina', name: 'The IBN SINA Pharmaceutical Industry PLC' },
       { key: 'popular', name: 'Popular Pharmaceuticals Ltd.' },
+      { key: 'radiant', name: 'Radiant Pharmaceuticals Ltd.' },
+      { key: 'beacon', name: 'Beacon Pharmaceuticals PLC' },
+      { key: 'novartis', name: 'Novartis AG' },
+      { key: 'pfizer', name: 'Pfizer Inc.' },
+      { key: 'gsk', name: 'GlaxoSmithKline PLC' },
+      { key: 'sanofi', name: 'Sanofi S.A.' },
+      { key: 'roche', name: 'F. Hoffmann-La Roche AG' },
       { key: 'unilever', name: 'Unilever Bangladesh' },
       { key: 'nestle', name: 'Nestle Bangladesh' },
       { key: 'pran', name: 'PRAN-RFL Group' }
@@ -1282,6 +1310,12 @@ export default function Suppliers() {
     // Also check current suppliers list
     const matchedFromSuppliers = suppliers.find(s => s.name && lower.includes(s.name.toLowerCase()));
     if (matchedFromSuppliers) return matchedFromSuppliers.name;
+
+    // Suffix matching for pharma corporate forms
+    const suffixMatch = cleanText.match(/\b([A-Z][a-zA-Z0-9\.\'\&\-\s]{2,35}?\s*(?:Pharma(?:ceuticals)?|Laboratories|Labs?|Healthcare|Therapeutics|PLC|Ltd|GmbH|A\/S|S\.A\.|Inc|Corp))\b/);
+    if (suffixMatch && suffixMatch[1] && !/^(?:prescription\s*only|keep\s*out|store\s*below|for\s*external)/i.test(suffixMatch[1].trim())) {
+      return suffixMatch[1].trim();
+    }
 
     return '';
   };
