@@ -4,6 +4,7 @@ import API_BASE_URL from '../config';
 import ElectronicCashDrawerModal from './ElectronicCashDrawerModal';
 import { triggerDrawerEjection, getDrawerConfig } from '../utils/cashDrawerService';
 import VoiceAssistantHUD from './VoiceAssistantHUD';
+import ComputerVisionModal from './ComputerVisionModal';
 import { isSpeechRecognitionSupported, parseVoiceCommand, findBestMatchingProduct, findAllMatchingProducts, hasThreeLetterMatch, speakVoice } from '../utils/voiceAssistant';
 
 const createNewSaleTab = (index) => ({
@@ -70,6 +71,7 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
   const [showCheckoutPreview, setShowCheckoutPreview] = useState(false); // Show preview before checkout
   const [previewModeType, setPreviewModeType] = useState('checkout'); // 'checkout' or 'due'
   const [showCashDrawerModal, setShowCashDrawerModal] = useState(false); // Electronic Cash Drawer Modal
+  const [showVisionModal, setShowVisionModal] = useState(false); // OpenCV Computer Vision Modal
 
   // Held Bills States
   const [heldBills, setHeldBills] = useState([]);
@@ -828,11 +830,19 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
     const handlePOSHotkeys = (e) => {
       // Esc key closes active overlay modals
       if (e.key === 'Escape') {
+        if (showVisionModal) { setShowVisionModal(false); return; }
         if (showCashDrawerModal) { setShowCashDrawerModal(false); return; }
         if (showKeyboardModal) { setShowKeyboardModal(false); return; }
         if (showCheckoutPreview) { setShowCheckoutPreview(false); return; }
         if (showHoldBillModal) { setShowHoldBillModal(false); return; }
         if (showHeldBillsModal) { setShowHeldBillsModal(false); return; }
+        return;
+      }
+
+      // Alt + C : Toggle OpenCV Computer Vision Scanner
+      if ((e.altKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
+        e.preventDefault();
+        setShowVisionModal(prev => !prev);
         return;
       }
 
@@ -1961,6 +1971,21 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
             <span>Cash Drawer (F12)</span>
           </button>
 
+          {/* OpenCV Computer Vision Scanner Header Button */}
+          <button
+            type="button"
+            onClick={() => setShowVisionModal(true)}
+            className="relative bg-gradient-to-r from-indigo-50 to-violet-50 hover:from-indigo-100 hover:to-violet-100 text-indigo-900 font-bold py-1.5 px-3 border border-indigo-300 rounded-xl text-xs shadow-xs transition-all flex items-center space-x-1.5 group"
+            title="OpenCV Computer Vision & Image Recognition (Alt+C)"
+          >
+            <span className="w-2 h-2 rounded-full bg-indigo-500 animate-ping"></span>
+            <svg className="w-3.5 h-3.5 text-indigo-600 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+            </svg>
+            <span>OpenCV Vision (Alt+C)</span>
+          </button>
+
 
 
           {/* Mobile-only View Cart Button (Marked Header Area) */}
@@ -2107,6 +2132,21 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
                   )}
                 </button>
               )}
+
+              {/* ── OpenCV Computer Vision Camera Scanner Button ── */}
+              <button
+                type="button"
+                onClick={() => setShowVisionModal(true)}
+                className="h-[46px] px-3.5 rounded-xl font-bold text-xs shadow-xs transition-all flex items-center space-x-1.5 border flex-shrink-0 cursor-pointer bg-gradient-to-r from-indigo-500 to-violet-600 hover:from-indigo-600 hover:to-violet-700 text-white border-indigo-400 shadow-indigo-300 active:scale-95"
+                title="OpenCV Computer Vision & Image Recognition Scanner (Alt+C)"
+              >
+                <svg className="w-4 h-4 text-white animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                </svg>
+                <span className="hidden sm:inline">Vision (Alt+C)</span>
+                <span className="sm:hidden">Vision</span>
+              </button>
             </div>
 
             {/* Barcode Scanner Console */}
@@ -2885,6 +2925,16 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
       <ElectronicCashDrawerModal
         isOpen={showCashDrawerModal}
         onClose={() => setShowCashDrawerModal(false)}
+      />
+
+      {/* --- OPENCV COMPUTER VISION IMAGE RECOGNITION MODAL --- */}
+      <ComputerVisionModal
+        isOpen={showVisionModal}
+        onClose={() => setShowVisionModal(false)}
+        products={products}
+        onAddToCart={(product, quantity) => {
+          addToCart(product, quantity);
+        }}
       />
 
       {/* --- DYNAMIC PRINT AREA (OFF-SCREEN ON APPLICATION SCREEN, SHOWN VIA PRINT MEDIA CLASS) --- */}
