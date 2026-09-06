@@ -9,6 +9,7 @@ export default function ContactUs({ onNavigate, publicPage }) {
     email_addresses: [],
     phone_numbers: [],
     address: '',
+    map_url: '',
     business_hours: {
       saturday_thursday: '',
       friday: ''
@@ -24,6 +25,33 @@ export default function ContactUs({ onNavigate, publicPage }) {
   const [loading, setLoading] = useState(true);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const navRef = useRef(null);
+
+  // Helper to resolve Google Maps embed URL
+  const getMapEmbedUrl = (mapUrl, address) => {
+    if (mapUrl && mapUrl.trim()) {
+      const trimmed = mapUrl.trim();
+      const iframeMatch = trimmed.match(/src=["']([^"']+)["']/i);
+      if (iframeMatch && iframeMatch[1]) {
+        return iframeMatch[1];
+      }
+      return trimmed;
+    }
+    const cleanAddr = address && address.trim() ? address.replace(/\r?\n/g, ', ').trim() : 'Dhaka, Bangladesh';
+    return `https://maps.google.com/maps?q=${encodeURIComponent(cleanAddr)}&t=&z=15&ie=UTF8&iwloc=&output=embed`;
+  };
+
+  // Helper to resolve external Google Maps directions link
+  const getDirectionsUrl = (mapUrl, address) => {
+    const cleanAddr = address && address.trim() ? address.replace(/\r?\n/g, ', ').trim() : '';
+    if (cleanAddr) {
+      return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(cleanAddr)}`;
+    }
+    if (mapUrl && mapUrl.trim()) {
+      const iframeMatch = mapUrl.match(/src=["']([^"']+)["']/i);
+      return iframeMatch ? iframeMatch[1] : mapUrl.trim();
+    }
+    return 'https://maps.google.com';
+  };
 
   // Hide mobile menu on outside click or touch anywhere on the display
   useEffect(() => {
@@ -380,6 +408,21 @@ export default function ContactUs({ onNavigate, publicPage }) {
                     ) : (
                       <p className="text-gray-600 text-sm">No address available</p>
                     )}
+                    {getMapEmbedUrl(contactInfo.map_url, contactInfo.address) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const el = document.getElementById('google-map-section');
+                          if (el) el.scrollIntoView({ behavior: 'smooth' });
+                        }}
+                        className="inline-flex items-center gap-1.5 mt-2.5 px-3 py-1 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-medium transition-all shadow-sm group"
+                      >
+                        <svg className="w-3.5 h-3.5 text-red-400 group-hover:scale-110 transition-transform" fill="currentColor" viewBox="0 0 24 24">
+                          <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 0 1 0-5 2.5 2.5 0 0 1 0 5z"/>
+                        </svg>
+                        View on Map &darr;
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -400,6 +443,89 @@ export default function ContactUs({ onNavigate, publicPage }) {
             </div>
           </div>
         </div>
+
+        {/* Google Map Section following website location */}
+        {getMapEmbedUrl(contactInfo.map_url, contactInfo.address) && (
+          <div id="google-map-section" className="mt-14 scroll-mt-28">
+            <div className="bg-white rounded-3xl border border-gray-200/90 shadow-xl shadow-slate-100 overflow-hidden">
+              {/* Header Bar above the map */}
+              <div className="p-6 sm:p-8 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                <div className="flex items-start sm:items-center gap-4">
+                  <div className="w-12 h-12 rounded-2xl bg-white/10 backdrop-blur-md flex items-center justify-center flex-shrink-0 border border-white/10 shadow-inner">
+                    <svg className="w-6 h-6 text-red-400" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 0 1 0-5 2.5 2.5 0 0 1 0 5z"/>
+                    </svg>
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold tracking-wide uppercase bg-sky-500/20 text-sky-300 border border-sky-400/30">
+                        <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping"></span>
+                        Our Location
+                      </span>
+                    </div>
+                    <h3 className="text-2xl font-bold text-white tracking-tight mt-1">
+                      Find Us on Google Maps
+                    </h3>
+                    <p className="text-slate-300 text-sm mt-0.5 max-w-xl">
+                      {contactInfo.address
+                        ? contactInfo.address.replace(/\r?\n/g, ', ')
+                        : 'Visit us during our regular business hours'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <a
+                    href={getDirectionsUrl(contactInfo.map_url, contactInfo.address)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl font-semibold text-sm bg-white text-slate-900 hover:bg-slate-100 transition-all shadow-md hover:shadow-lg transform active:scale-95"
+                  >
+                    <span>Get Directions</span>
+                    <svg className="w-4 h-4 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    </svg>
+                  </a>
+                </div>
+              </div>
+
+              {/* Map Iframe */}
+              <div className="relative w-full h-[400px] sm:h-[480px] bg-slate-100">
+                <iframe
+                  title="Website Google Map Location"
+                  src={getMapEmbedUrl(contactInfo.map_url, contactInfo.address)}
+                  className="w-full h-full border-0"
+                  allowFullScreen=""
+                  loading="lazy"
+                  referrerPolicy="no-referrer-when-downgrade"
+                />
+              </div>
+
+              {/* Footer info bar under the map */}
+              <div className="px-6 py-4 bg-slate-50 border-t border-gray-100 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                  <span>
+                    <strong>Store Hours:</strong>{' '}
+                    {contactInfo.business_hours?.saturday_thursday
+                      ? `Sat–Thu: ${contactInfo.business_hours.saturday_thursday}`
+                      : '9:00 AM – 6:00 PM'}
+                  </span>
+                </div>
+                <div>
+                  <a
+                    href={getDirectionsUrl(contactInfo.map_url, contactInfo.address)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-slate-900 hover:text-sky-600 font-medium underline transition-colors"
+                  >
+                    Open in full Google Maps app &rarr;
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
         </>
         )}
       </div>

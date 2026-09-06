@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS `contact_information` (
   `email_addresses` JSON NULL,
   `phone_numbers` JSON NULL,
   `address` TEXT NULL,
+  `map_url` TEXT NULL,
   `business_hours` JSON NULL,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

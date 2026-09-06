@@ -243,6 +243,11 @@ class DB {
                 $pdo->exec("ALTER TABLE `contact_information` ADD COLUMN `payment_numbers` JSON NULL AFTER `phone_numbers`");
             }
 
+            // Add map_url column to contact_information if missing
+            if ($tableExists('contact_information') && !$columnExists('contact_information', 'map_url')) {
+                $pdo->exec("ALTER TABLE `contact_information` ADD COLUMN `map_url` TEXT NULL AFTER `address`");
+            }
+
             // Check if quantity_ordered column exists on purchase_order_items table (handle column name mismatch)
             if ($tableExists('purchase_order_items') && $columnExists('purchase_order_items', 'quantity') && !$columnExists('purchase_order_items', 'quantity_ordered')) {
                 $pdo->exec("ALTER TABLE `purchase_order_items` CHANGE COLUMN `quantity` `quantity_ordered` INT NOT NULL");

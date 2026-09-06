@@ -9,6 +9,7 @@ export default function ContactInformation() {
     phone_numbers: [],
     payment_numbers: [],
     address: '',
+    map_url: '',
     business_hours: {
       saturday_thursday: '',
       friday: ''
@@ -34,7 +35,8 @@ export default function ContactInformation() {
         const data = await response.json();
         setContactInfo({
           ...data,
-          payment_numbers: data.payment_numbers || []
+          payment_numbers: data.payment_numbers || [],
+          map_url: data.map_url || ''
         });
       }
     } catch (err) {
@@ -124,6 +126,22 @@ export default function ContactInformation() {
     );
   }
 
+  const getMapEmbedUrl = (mapUrl, address) => {
+    if (mapUrl && mapUrl.trim()) {
+      const trimmed = mapUrl.trim();
+      const iframeMatch = trimmed.match(/src=["']([^"']+)["']/i);
+      if (iframeMatch && iframeMatch[1]) {
+        return iframeMatch[1];
+      }
+      return trimmed;
+    }
+    if (address && address.trim()) {
+      const cleanAddr = address.replace(/\r?\n/g, ', ').trim();
+      return `https://maps.google.com/maps?q=${encodeURIComponent(cleanAddr)}&t=&z=15&ie=UTF8&iwloc=&output=embed`;
+    }
+    return '';
+  };
+
   const sectionCard = "bg-white p-6 rounded-xl border border-gray-200 shadow-sm";
   const inputCls = "flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-gray-900";
   const removeBtnCls = "px-3 py-2 bg-red-100 text-red-700 text-sm rounded-lg hover:bg-red-200 transition-colors font-medium";
@@ -133,7 +151,7 @@ export default function ContactInformation() {
     <div className="p-6 max-w-3xl">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Contact Information Management</h1>
-        <p className="text-gray-500 mt-1 text-sm">Manage contact details and payment numbers displayed on the website's subscription modal.</p>
+        <p className="text-gray-500 mt-1 text-sm">Manage contact details, address, Google Map location, and payment numbers displayed on the website.</p>
       </div>
 
       {error && <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg"><p className="text-red-700 text-sm">{error}</p></div>}
@@ -223,10 +241,85 @@ export default function ContactInformation() {
 
         {/* Address */}
         <div className={sectionCard}>
-          <h2 className="text-base font-semibold text-gray-900 mb-3">Address</h2>
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-base font-semibold text-gray-900">Address (Website Location)</h2>
+            <span className="text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full font-medium">Controls Map Pin</span>
+          </div>
+          <p className="text-xs text-gray-500 mb-3">
+            Enter your business address or location name. The Google Map on the Contact Us page will automatically show this exact location.
+          </p>
           <textarea value={contactInfo.address} onChange={(e) => setContactInfo({ ...contactInfo, address: e.target.value })}
             className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-gray-900 resize-none"
             rows={3} placeholder="123 Business Ave, Suite 100&#10;City, Country" />
+        </div>
+
+        {/* Google Map Location & Live Preview */}
+        <div className={sectionCard}>
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+                <svg className="w-5 h-5 text-red-500" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 0 1 0-5 2.5 2.5 0 0 1 0 5z"/>
+                </svg>
+                Google Map Location Settings
+              </h2>
+              <p className="text-xs text-gray-500 mt-0.5">
+                By default, the Google Map automatically tracks and pinpoints your <strong>Address</strong> above.
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-4 mt-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">
+                Custom Google Maps Embed URL or &lt;iframe&gt; (Optional)
+              </label>
+              <input
+                type="text"
+                value={contactInfo.map_url || ''}
+                onChange={(e) => setContactInfo({ ...contactInfo, map_url: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-gray-900"
+                placeholder="Leave blank to automatically use Address, or paste Google Maps embed URL / iframe"
+              />
+              <p className="text-[11px] text-gray-400 mt-1">
+                Leave empty unless you want to override the address pin with a specific embed URL or custom coordinates.
+              </p>
+            </div>
+
+            {/* Live Map Preview */}
+            <div className="pt-3 border-t border-gray-100">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-semibold text-gray-700 uppercase tracking-wider flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                  Live Google Map Preview
+                </span>
+                <span className="text-xs text-gray-500 truncate max-w-xs">
+                  {contactInfo.map_url
+                    ? 'Using: Custom Map Embed'
+                    : (contactInfo.address ? `Using Address: ${contactInfo.address.replace(/\r?\n/g, ', ')}` : 'No address set')}
+                </span>
+              </div>
+              {getMapEmbedUrl(contactInfo.map_url, contactInfo.address) ? (
+                <div className="w-full h-64 rounded-xl overflow-hidden border border-gray-200 shadow-inner bg-gray-50 relative">
+                  <iframe
+                    title="Google Map Live Preview"
+                    src={getMapEmbedUrl(contactInfo.map_url, contactInfo.address)}
+                    className="w-full h-full border-0"
+                    loading="lazy"
+                    referrerPolicy="no-referrer-when-downgrade"
+                  />
+                </div>
+              ) : (
+                <div className="w-full h-36 rounded-xl border border-dashed border-gray-300 flex flex-col items-center justify-center text-gray-400 text-xs gap-1 bg-gray-50/50">
+                  <svg className="w-6 h-6 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                  <span>Type your address above to see the live Google Map.</span>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Business Hours */}

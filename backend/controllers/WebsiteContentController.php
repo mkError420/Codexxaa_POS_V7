@@ -40,6 +40,8 @@ class WebsiteContentController {
                 ? $contactInfo['payment_numbers'] 
                 : (json_decode($contactInfo['payment_numbers'] ?? '[]', true) ?? []);
 
+            $contactInfo['map_url'] = $contactInfo['map_url'] ?? '';
+
             $businessHours = is_array($contactInfo['business_hours'] ?? null) 
                 ? $contactInfo['business_hours'] 
                 : (json_decode($contactInfo['business_hours'] ?? '{}', true) ?? []);
@@ -117,6 +119,10 @@ class WebsiteContentController {
             $address = isset($input['address']) 
                 ? (string)$input['address'] 
                 : ($contactInfo['address'] ?? '');
+
+            $mapUrl = isset($input['map_url']) 
+                ? (string)$input['map_url'] 
+                : ($contactInfo['map_url'] ?? '');
             
             // Handle business hours
             if (isset($input['business_hours'])) {
@@ -138,12 +144,32 @@ class WebsiteContentController {
                     : ($contactInfo['business_hours'] ?? '{}');
             }
             
-            $stmt = $this->db->prepare("
-                UPDATE contact_information 
-                SET email_addresses = ?, phone_numbers = ?, payment_numbers = ?, address = ?, business_hours = ?
-                WHERE id = ?
-            ");
-            $stmt->execute([$emailAddresses, $phoneNumbers, $paymentNumbers, $address, $businessHoursJson, $id]);
+            try {
+                $stmt = $this->db->prepare("
+                    UPDATE contact_information 
+                    SET email_addresses = ?, phone_numbers = ?, payment_numbers = ?, address = ?, map_url = ?, business_hours = ?
+                    WHERE id = ?
+                ");
+                $stmt->execute([$emailAddresses, $phoneNumbers, $paymentNumbers, $address, $mapUrl, $businessHoursJson, $id]);
+            } catch (\Exception $ex) {
+                // If map_url column does not exist yet, attempt to add it, else fallback
+                try {
+                    $this->db->exec("ALTER TABLE `contact_information` ADD COLUMN `map_url` TEXT NULL AFTER `address`");
+                    $stmt = $this->db->prepare("
+                        UPDATE contact_information 
+                        SET email_addresses = ?, phone_numbers = ?, payment_numbers = ?, address = ?, map_url = ?, business_hours = ?
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([$emailAddresses, $phoneNumbers, $paymentNumbers, $address, $mapUrl, $businessHoursJson, $id]);
+                } catch (\Exception $fallbackEx) {
+                    $stmt = $this->db->prepare("
+                        UPDATE contact_information 
+                        SET email_addresses = ?, phone_numbers = ?, payment_numbers = ?, address = ?, business_hours = ?
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([$emailAddresses, $phoneNumbers, $paymentNumbers, $address, $businessHoursJson, $id]);
+                }
+            }
             
             header('Content-Type: application/json');
             echo json_encode([
