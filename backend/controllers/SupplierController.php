@@ -530,45 +530,43 @@ class SupplierController {
             $productId = $item['product_id'];
             $resolvedExpiry = !empty($item['expiry_date']) ? date('Y-m-d', strtotime($item['expiry_date'])) : null;
 
-            // 1. If product_id was provided, verify it exists in this shop
             $existingProd = null;
-            if (!empty($productId)) {
-                $stmt = DB::query('SELECT * FROM products WHERE id = ? AND shop_id = ? LIMIT 1', [$productId, $shopId]);
-                $existingProd = $stmt->fetch();
-                // If item has a SKU specified and it's different from the existing product's SKU, don't blindly reuse this product ID
-                if ($existingProd && !empty($item['sku']) && strcasecmp(trim($item['sku']), trim($existingProd['sku'] ?? '')) !== 0) {
-                    // Check if another product with this new SKU exists
-                    $stmtSku = DB::query('SELECT * FROM products WHERE shop_id = ? AND sku = ? LIMIT 1', [$shopId, trim($item['sku'])]);
-                    $existingProd = $stmtSku->fetch();
-                    if (!$existingProd) {
-                        // Brand new product variant with new SKU!
-                        $productId = null;
-                    } else {
-                        $productId = (int)$existingProd['id'];
-                    }
+
+            // 1. If admin explicitly provided a SKU, find strictly by SKU
+            if (!empty($item['sku'])) {
+                $stmtSku = DB::query('SELECT * FROM products WHERE shop_id = ? AND sku = ? LIMIT 1', [$shopId, trim($item['sku'])]);
+                $existingProd = $stmtSku->fetch();
+                if ($existingProd) {
+                    $productId = (int)$existingProd['id'];
+                } else {
+                    $productId = null;
                 }
             }
 
-            // 2. If not found by product_id, try finding strictly by SKU (if provided)
-            if (!$existingProd && !empty($item['sku'])) {
-                $stmt = DB::query('SELECT * FROM products WHERE shop_id = ? AND sku = ? LIMIT 1', [$shopId, trim($item['sku'])]);
-                $existingProd = $stmt->fetch();
-                if ($existingProd) {
-                    $productId = (int)$existingProd['id'];
+            // 2. If no SKU provided or not found by SKU, match strictly by Name AND Expiry Date
+            // Same name products with different expiry dates are saved as separate products
+            if (!$existingProd && !empty($item['name'])) {
+                if (!empty($resolvedExpiry)) {
+                    $stmtMatch = DB::query(
+                        'SELECT * FROM products WHERE shop_id = ? AND LOWER(TRIM(name)) = LOWER(TRIM(?)) AND expiry_date = ? LIMIT 1',
+                        [$shopId, $item['name'], $resolvedExpiry]
+                    );
+                } else {
+                    $stmtMatch = DB::query(
+                        "SELECT * FROM products WHERE shop_id = ? AND LOWER(TRIM(name)) = LOWER(TRIM(?)) AND (expiry_date IS NULL OR expiry_date = '' OR expiry_date = '0000-00-00') LIMIT 1",
+                        [$shopId, $item['name']]
+                    );
                 }
-            }
-
-            // 3. Only if no SKU was provided AND is_new is false, try finding by Name (case-insensitive and trimmed)
-            if (!$existingProd && empty($item['sku']) && empty($item['is_new']) && !empty($item['name'])) {
-                $stmt = DB::query('SELECT * FROM products WHERE shop_id = ? AND LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1', [$shopId, $item['name']]);
-                $existingProd = $stmt->fetch();
+                $existingProd = $stmtMatch->fetch();
                 if ($existingProd) {
                     $productId = (int)$existingProd['id'];
+                } else {
+                    $productId = null;
                 }
             }
 
             if ($existingProd) {
-                // Product already exists in products table! Reuse it.
+                // Product with matching expiry date already exists in products table! Reuse it.
                 $productId = (int)$existingProd['id'];
 
                 $updateFields = [];
@@ -605,13 +603,19 @@ class SupplierController {
                     DB::query('UPDATE products SET ' . implode(', ', $updateFields) . ' WHERE id = ? AND shop_id = ?', $updateParams);
                 }
             } else {
-                // Completely new product not in database
-                $sku = !empty($item['sku']) ? trim($item['sku']) : ('SKU-' . strtoupper(substr(preg_replace('/[^A-Za-z0-9]/', '', $item['name']), 0, 3)) . '-' . rand(100, 999));
-                
-                // Ensure generated SKU is unique in shop
-                $skuCheck = DB::query('SELECT id FROM products WHERE shop_id = ? AND sku = ?', [$shopId, $sku]);
-                if ($skuCheck->fetch()) {
-                    $sku = 'SKU-' . strtoupper(substr(preg_replace('/[^A-Za-z0-9]/', '', $item['name']), 0, 3)) . '-' . rand(1000, 9999);
+                // Separate product for this expiry date or completely new product
+                if (!empty($item['sku'])) {
+                    $sku = trim($item['sku']);
+                } else {
+                    $cleanName = strtoupper(preg_replace('/[^A-Za-z0-9]/', '', $item['name']));
+                    $prefix = substr($cleanName, 0, 4);
+                    if (empty($prefix)) {
+                        $prefix = 'PROD';
+                    }
+                    do {
+                        $sku = 'SKU-' . $prefix . '-' . rand(1000, 9999);
+                        $check = DB::query('SELECT id FROM products WHERE shop_id = ? AND sku = ? LIMIT 1', [$shopId, $sku])->fetch();
+                    } while ($check);
                 }
 
                 $sellingPriceVal = ($item['selling_price'] > 0) ? $item['selling_price'] : $item['cost_price'];
@@ -857,14 +861,15 @@ class SupplierController {
             }
             
             // Fetch PO items
+            $expiryColSelect = $columnExists('purchase_order_items', 'expiry_date') ? ', COALESCE(poi.expiry_date, p.expiry_date) AS expiry_date' : ', p.expiry_date AS expiry_date';
             if ($hasShopId) {
-                $sql = 'SELECT poi.*, p.name AS product_name, p.sku AS product_sku, p.category AS product_category, p.unit AS product_unit ' . $unitSizeSelect . '
+                $sql = 'SELECT poi.*, p.name AS product_name, p.sku AS product_sku, p.category AS product_category, p.unit AS product_unit ' . $unitSizeSelect . $expiryColSelect . '
                         FROM purchase_order_items poi 
                         JOIN products p ON poi.product_id = p.id 
                         WHERE poi.purchase_order_id = ? AND poi.shop_id = ?';
                 $params = [$poId, $shopId];
             } else {
-                $sql = 'SELECT poi.*, p.name AS product_name, p.sku AS product_sku, p.category AS product_category, p.unit AS product_unit ' . $unitSizeSelect . '
+                $sql = 'SELECT poi.*, p.name AS product_name, p.sku AS product_sku, p.category AS product_category, p.unit AS product_unit ' . $unitSizeSelect . $expiryColSelect . '
                         FROM purchase_order_items poi 
                         JOIN products p ON poi.product_id = p.id 
                         WHERE poi.purchase_order_id = ?';
@@ -1247,10 +1252,12 @@ class SupplierController {
             if ($status === 'received') {
                 // If items not provided, auto-receive all items with ordered quantities
                 if (empty($items) || !is_array($items)) {
+                    $hasPoiExpiry = $columnExists('purchase_order_items', 'expiry_date');
+                    $expirySelect = $hasPoiExpiry ? ', poi.expiry_date' : '';
                     $itemsStmt = DB::query(
-                        'SELECT poi.product_id, poi.quantity_ordered, poi.cost_price, poi.selling_price 
+                        "SELECT poi.product_id, poi.quantity_ordered, poi.cost_price, poi.selling_price $expirySelect 
                          FROM purchase_order_items poi 
-                         WHERE poi.purchase_order_id = ? AND poi.shop_id = ?',
+                         WHERE poi.purchase_order_id = ? AND poi.shop_id = ?",
                         [$poId, $shopId]
                     );
                     $poItems = $itemsStmt->fetchAll();
@@ -1262,7 +1269,7 @@ class SupplierController {
                             'quantity_received' => (int)$poItem['quantity_ordered'],
                             'cost_price' => (float)$poItem['cost_price'],
                             'selling_price' => (float)$poItem['selling_price'],
-                            'expiry_date' => null
+                            'expiry_date' => !empty($poItem['expiry_date']) ? $poItem['expiry_date'] : null
                         ];
                     }
                 }
@@ -1280,6 +1287,10 @@ class SupplierController {
 
                     if (!$baseProd) {
                         continue;
+                    }
+
+                    if (empty($expiryDate) && !empty($baseProd['expiry_date'])) {
+                        $expiryDate = $baseProd['expiry_date'];
                     }
 
                     $targetProductId = $originalProductId;
