@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import API_BASE_URL from '../config';
 import ElectronicCashDrawerModal from './ElectronicCashDrawerModal';
 import { triggerDrawerEjection, getDrawerConfig } from '../utils/cashDrawerService';
+import VoiceAssistantHUD from './VoiceAssistantHUD';
+import { isSpeechRecognitionSupported, parseVoiceCommand, findBestMatchingProduct, findAllMatchingProducts, hasThreeLetterMatch, speakVoice } from '../utils/voiceAssistant';
 
 const createNewSaleTab = (index) => ({
   id: Date.now() + Math.random() * 1000, // Unique ID for the tab with random factor
@@ -79,6 +81,19 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
   // Subtotal inline-edit state — tracks which cart item's subtotal is being edited and its raw string
   const [editingSubtotalId, setEditingSubtotalId] = useState(null);
   const [editingSubtotalValue, setEditingSubtotalValue] = useState('');
+
+  // ── Voice Assistant States ──────────────────────────────────────────────
+  const [voiceListening, setVoiceListening] = useState(false);
+  const [voiceTranscript, setVoiceTranscript] = useState('');
+  const [voiceFeedback, setVoiceFeedback] = useState('');
+  const [voiceStatus, setVoiceStatus] = useState('idle'); // 'idle' | 'listening' | 'processing' | 'success' | 'error'
+  const [voiceContinuous, setVoiceContinuous] = useState(false); // Hands-free continuous mode
+  const [voiceMuted, setVoiceMuted] = useState(false); // Mute TTS voice response
+  const [showVoiceHelp, setShowVoiceHelp] = useState(false);
+  const [voiceSupported] = useState(() => isSpeechRecognitionSupported());
+  const voiceRecognitionRef = useRef(null);
+  const voiceFeedbackTimerRef = useRef(null);
+  // ───────────────────────────────────────────────────────────────────────
 
   // Derived active tab state
   const activeTabIndex = saleTabs.findIndex(t => t.id === activeTabId);
@@ -261,7 +276,7 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
   useEffect(() => {
     const delayDebounceFn = setTimeout(() => {
       fetchProducts(search);
-    }, 400);
+    }, 200);
 
     return () => clearTimeout(delayDebounceFn);
   }, [search]);
@@ -527,6 +542,287 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
     };
   }, [receipt, showHeldBillsModal, showHoldBillModal, barcodeInput, activeTabId, customers]);
 
+  // ── Voice Assistant Logic ────────────────────────────────────────────────
+
+  // Show a temporary feedback message in the HUD
+  const setVoiceFeedbackMsg = useCallback((msg, status = 'idle', duration = 3500) => {
+    if (voiceFeedbackTimerRef.current) clearTimeout(voiceFeedbackTimerRef.current);
+    setVoiceFeedback(msg);
+    setVoiceStatus(status);
+    voiceFeedbackTimerRef.current = setTimeout(() => {
+      setVoiceFeedback('');
+      setVoiceStatus('idle');
+    }, duration);
+  }, []);
+
+  // Handle a parsed voice command from the speech recognizer
+  const handleVoiceCommand = useCallback((transcript, allProducts) => {
+    if (!transcript || !transcript.trim()) return;
+
+    setVoiceTranscript(transcript);
+    setVoiceStatus('processing');
+    setVoiceFeedback('Processing command...');
+
+    const cmd = parseVoiceCommand(transcript);
+
+    if (cmd.action === 'CLEAR_CART') {
+      if (window.confirm('Voice command: Clear cart? Press OK to confirm.')) {
+        updateActiveTabState('cart', []);
+        updateActiveTabState('discountPercent', 0);
+        updateActiveTabState('discountAmount', 0);
+        updateActiveTabState('paidAmount', '');
+        updateActiveTabState('isPaidTouched', false);
+        const msg = 'Cart cleared!';
+        setVoiceFeedbackMsg(msg, 'success');
+        speakVoice(msg, !voiceMuted);
+      } else {
+        setVoiceFeedbackMsg('Clear cart cancelled.', 'idle');
+      }
+      return;
+    }
+
+    if (cmd.action === 'CHECKOUT') {
+      setSaleTabs(prev => {
+        const tab = prev.find(t => t.id === activeTabId);
+        if (!tab || tab.cart.length === 0) {
+          setVoiceFeedbackMsg('Cart is empty. Add items first.', 'error');
+          speakVoice('Cart is empty.', !voiceMuted);
+          return prev;
+        }
+        setPreviewModeType('checkout');
+        setShowCheckoutPreview(true);
+        const msg = 'Opening checkout...';
+        setVoiceFeedbackMsg(msg, 'success');
+        speakVoice(msg, !voiceMuted);
+        return prev;
+      });
+      return;
+    }
+
+    if (cmd.action === 'HOLD_BILL') {
+      setShowHoldBillModal(true);
+      const msg = 'Hold bill dialog opened.';
+      setVoiceFeedbackMsg(msg, 'success');
+      speakVoice('Holding bill.', !voiceMuted);
+      return;
+    }
+
+    if (cmd.action === 'SEARCH') {
+      setSearch(cmd.query || '');
+      const msg = `Searching for: "${cmd.query}"...`;
+      setVoiceFeedbackMsg(msg, 'success');
+      speakVoice(`Searching ${cmd.query}`, !voiceMuted);
+      return;
+    }
+
+    if (cmd.action === 'REMOVE') {
+      setSaleTabs(prev => {
+        const tab = prev.find(t => t.id === activeTabId);
+        if (!tab || tab.cart.length === 0) {
+          setVoiceFeedbackMsg('Cart is empty, nothing to remove.', 'error');
+          speakVoice('Nothing to remove.', !voiceMuted);
+          return prev;
+        }
+        const match = findBestMatchingProduct(cmd.query, tab.cart);
+        if (!match) {
+          setVoiceFeedbackMsg(`Could not find "${cmd.query}" in your cart.`, 'error');
+          speakVoice(`${cmd.query} not found in cart.`, !voiceMuted);
+          return prev;
+        }
+        const newCart = tab.cart.filter(item => item.id !== match.product.id);
+        const newTabs = prev.map(t => t.id === activeTabId ? { ...t, cart: newCart } : t);
+        const msg = `Removed "${match.product.name}" from cart.`;
+        setVoiceFeedbackMsg(msg, 'success');
+        speakVoice(`Removed ${match.product.name}.`, !voiceMuted);
+        return newTabs;
+      });
+      return;
+    }
+
+    if (cmd.action === 'ADD') {
+      const result = findBestMatchingProduct(cmd.query, allProducts);
+      if (!result || !result.product) {
+        const msg = `Product not found: "${cmd.query}". Try searching manually.`;
+        setVoiceFeedbackMsg(msg, 'error');
+        speakVoice(`${cmd.query} not found.`, !voiceMuted);
+        // Fallback: populate search so user can see results
+        setSearch(cmd.query || '');
+        return;
+      }
+
+      const { product } = result;
+      const qty = Math.max(1, Math.floor(cmd.quantity || 1));
+
+      if (parseFloat(product.stock_quantity || 0) <= 0) {
+        const msg = `"${product.name}" is out of stock.`;
+        setVoiceFeedbackMsg(msg, 'error');
+        speakVoice(msg, !voiceMuted);
+        return;
+      }
+
+      // Add the product qty times, respecting stock limit
+      setSaleTabs(prev => {
+        const tab = prev.find(t => t.id === activeTabId);
+        if (!tab) return prev;
+        let cart = [...tab.cart];
+        const existingIndex = cart.findIndex(item => item.id === product.id);
+        const stockLimit = parseFloat(product.stock_quantity || 0);
+
+        if (existingIndex > -1) {
+          const currentQty = cart[existingIndex].quantity;
+          const addQty = Math.min(qty, stockLimit - currentQty);
+          if (addQty <= 0) {
+            setVoiceFeedbackMsg(`Cannot exceed stock limit (${stockLimit}) for "${product.name}".`, 'error');
+            speakVoice(`Stock limit reached for ${product.name}.`, !voiceMuted);
+            return prev;
+          }
+          cart[existingIndex] = { ...cart[existingIndex], quantity: cart[existingIndex].quantity + addQty };
+          const msg = qty === 1
+            ? `Added 1 more "${product.name}" to cart.`
+            : `Added ${addQty} "${product.name}" to cart.`;
+          setVoiceFeedbackMsg(msg, 'success');
+          speakVoice(`${addQty} ${product.name} added.`, !voiceMuted);
+        } else {
+          const addQty = Math.min(qty, stockLimit);
+          cart = [...cart, { ...product, quantity: addQty, price: product.price, stock_quantity: stockLimit }];
+          const msg = qty === 1
+            ? `"${product.name}" added to cart.`
+            : `${addQty} × "${product.name}" added to cart.`;
+          setVoiceFeedbackMsg(msg, 'success');
+          speakVoice(`${addQty} ${product.name} added.`, !voiceMuted);
+        }
+        return prev.map(t => t.id === activeTabId ? { ...t, cart } : t);
+      });
+      return;
+    }
+
+    // Unknown / fallback — run as a search
+    if (cmd.query) {
+      setSearch(cmd.query);
+      setVoiceFeedbackMsg(`Searching for: "${cmd.query}"...`, 'success');
+      speakVoice(`Searching ${cmd.query}`, !voiceMuted);
+    } else {
+      setVoiceFeedbackMsg(`Could not understand: "${transcript}". Try again.`, 'error');
+      speakVoice('Please try again.', !voiceMuted);
+    }
+  }, [activeTabId, voiceMuted, setVoiceFeedbackMsg]);
+
+  // Start speech recognition
+  const startVoiceListening = useCallback(() => {
+    if (!voiceSupported) {
+      triggerAlert('error', 'Voice recognition is not supported in your browser. Please try Chrome or Edge.');
+      return;
+    }
+    if (voiceRecognitionRef.current) {
+      try { voiceRecognitionRef.current.abort(); } catch (e) {}
+    }
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+    // South Asian English (en-IN) gives best accuracy for Bengali/Indian/Pakistani accents.
+    // Chrome uses Google's South Asian acoustic model with this locale.
+    recognition.lang = 'en-IN';
+    recognition.continuous = voiceContinuous;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+    voiceRecognitionRef.current = recognition;
+
+    recognition.onstart = () => {
+      setVoiceListening(true);
+      setVoiceStatus('listening');
+      setVoiceTranscript('');
+      setVoiceFeedback('');
+    };
+
+    recognition.onresult = (event) => {
+      let interim = '';
+      let final = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          final += transcript;
+        } else {
+          interim += transcript;
+        }
+      }
+      if (interim) setVoiceTranscript(interim);
+      if (final) {
+        setVoiceTranscript(final);
+        // Pass current products snapshot for matching
+        setProducts(currentProducts => {
+          handleVoiceCommand(final, currentProducts);
+          return currentProducts;
+        });
+      }
+    };
+
+    recognition.onerror = (event) => {
+      if (event.error === 'no-speech') {
+        setVoiceFeedbackMsg('No speech detected. Try speaking closer to the microphone.', 'error');
+      } else if (event.error === 'not-allowed') {
+        triggerAlert('error', 'Microphone access denied. Please allow microphone access in your browser settings.');
+        setVoiceListening(false);
+        setVoiceStatus('idle');
+      } else {
+        setVoiceFeedbackMsg(`Voice error: ${event.error}`, 'error');
+      }
+    };
+
+    recognition.onend = () => {
+      setVoiceListening(false);
+      setVoiceStatus('idle');
+      // In continuous / hands-free mode, auto-restart after each result
+      if (voiceContinuous && voiceRecognitionRef.current === recognition) {
+        try {
+          setTimeout(() => {
+            if (voiceContinuous && voiceRecognitionRef.current === recognition) {
+              recognition.start();
+              setVoiceListening(true);
+              setVoiceStatus('listening');
+            }
+          }, 300);
+        } catch (e) {}
+      }
+    };
+
+    try {
+      recognition.start();
+    } catch (e) {
+      triggerAlert('error', 'Could not start voice recognition: ' + e.message);
+    }
+  }, [voiceSupported, voiceContinuous, handleVoiceCommand, setVoiceFeedbackMsg]);
+
+  // Stop speech recognition
+  const stopVoiceListening = useCallback(() => {
+    if (voiceRecognitionRef.current) {
+      try { voiceRecognitionRef.current.abort(); } catch (e) {}
+      voiceRecognitionRef.current = null;
+    }
+    setVoiceListening(false);
+    setVoiceStatus('idle');
+    setVoiceTranscript('');
+  }, []);
+
+  // Toggle continuous hands-free mode
+  const toggleVoiceContinuous = useCallback(() => {
+    setVoiceContinuous(prev => {
+      const next = !prev;
+      if (!next && voiceListening) stopVoiceListening();
+      return next;
+    });
+  }, [voiceListening, stopVoiceListening]);
+
+  // Cleanup voice recognition on unmount
+  useEffect(() => {
+    return () => {
+      if (voiceRecognitionRef.current) {
+        try { voiceRecognitionRef.current.abort(); } catch (e) {}
+      }
+      if (voiceFeedbackTimerRef.current) clearTimeout(voiceFeedbackTimerRef.current);
+    };
+  }, []);
+
+  // ── End Voice Assistant Logic ────────────────────────────────────────────
+
   // Global POS Keyboard Hotkeys (F2: Search, F4: Customer, F8: Clear, F9: Pay, F10: Hold, Alt+K: Numpad, Esc: Close)
   useEffect(() => {
     const handlePOSHotkeys = (e) => {
@@ -556,6 +852,17 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
       if ((e.altKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
         e.preventDefault();
         setShowKeyboardModal(prev => !prev);
+        return;
+      }
+
+      // Alt + V : Toggle Voice Assistant (Start / Stop)
+      if ((e.altKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
+        e.preventDefault();
+        if (voiceListening) {
+          stopVoiceListening();
+        } else {
+          startVoiceListening();
+        }
         return;
       }
 
@@ -678,7 +985,7 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
     return () => {
       window.removeEventListener('keydown', handlePOSHotkeys);
     };
-  }, [activeTab, receipt, showHeldBillsModal, showHoldBillModal, showCheckoutPreview, showKeyboardModal, submitting, selectedCartItemId]);
+  }, [activeTab, receipt, showHeldBillsModal, showHoldBillModal, showCheckoutPreview, showKeyboardModal, submitting, selectedCartItemId, voiceListening, startVoiceListening, stopVoiceListening]);
 
   // Handler for Virtual Numpad Key Press
   const handleNumpadPress = (key) => {
@@ -1593,6 +1900,22 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
   return (
     <div className="relative h-full flex flex-col">
 
+      {/* ── Voice Assistant HUD (floating overlay) ── */}
+      <VoiceAssistantHUD
+        isListening={voiceListening}
+        transcript={voiceTranscript}
+        feedback={voiceFeedback}
+        status={voiceStatus}
+        isContinuous={voiceContinuous}
+        onToggleContinuous={toggleVoiceContinuous}
+        isMuted={voiceMuted}
+        onToggleMute={() => setVoiceMuted(prev => !prev)}
+        onStop={stopVoiceListening}
+        onStart={startVoiceListening}
+        showHelp={showVoiceHelp}
+        onToggleHelp={() => setShowVoiceHelp(prev => !prev)}
+      />
+
       {/* 1. Alerts Banner */}
       {alert && (
         <div className={`fixed top-4 right-4 z-50 p-4 rounded-xl shadow-lg flex items-center space-x-3 transition-all ${alert.type === 'success' ? 'bg-emerald-500 text-white' : 'bg-rose-500 text-white'
@@ -1637,6 +1960,8 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
             </svg>
             <span>Cash Drawer (F12)</span>
           </button>
+
+
 
           {/* Mobile-only View Cart Button (Marked Header Area) */}
           <button
@@ -1693,54 +2018,95 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
         <div className="lg:col-span-5 flex flex-col overflow-hidden">
           {/* Search & Barcode Scan Console */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
-            {/* Search Input */}
-            <div className="sm:col-span-2 relative">
-              <input
-                ref={searchInputRef}
-                type="text"
-                placeholder="Search by product name, category, or SKU... (F2)"
-                value={search}
-                onChange={(e) => { setSearch(e.target.value); setSearchFocusedIndex(-1); }}
-                onKeyDown={(e) => {
-                  if (e.key === 'ArrowDown') {
-                    e.preventDefault();
-                    const newIndex = searchFocusedIndex < products.length - 1 ? searchFocusedIndex + 1 : searchFocusedIndex;
-                    setSearchFocusedIndex(newIndex);
-                    // Scroll to keep the focused item visible
-                    setTimeout(() => {
-                      const focusedRow = productTableBodyRef.current?.children[newIndex];
-                      if (focusedRow) {
-                        focusedRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                      }
-                    }, 0);
-                  } else if (e.key === 'ArrowUp') {
-                    e.preventDefault();
-                    const newIndex = searchFocusedIndex > 0 ? searchFocusedIndex - 1 : searchFocusedIndex;
-                    setSearchFocusedIndex(newIndex);
-                    // Scroll to keep the focused item visible
-                    setTimeout(() => {
-                      const focusedRow = productTableBodyRef.current?.children[newIndex];
-                      if (focusedRow) {
-                        focusedRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                      }
-                    }, 0);
-                  } else if (e.key === 'Enter') {
-                    e.preventDefault();
-                    if (searchFocusedIndex >= 0 && products[searchFocusedIndex]) {
-                      const product = products[searchFocusedIndex];
-                      const inCartItem = activeTab?.cart?.find(item => item.id === product.id);
-                      const remainingQty = product.stock_quantity - (inCartItem ? inCartItem.quantity : 0);
-                      if (remainingQty > 0) {
-                        addToCart(product);
+            {/* Search Input with Voice Button beside it */}
+            <div className="sm:col-span-2 flex items-center gap-2">
+              <div className="relative flex-1">
+                <input
+                  ref={searchInputRef}
+                  type="text"
+                  placeholder="Search by product name, category, or SKU... (F2)"
+                  value={search}
+                  onChange={(e) => { setSearch(e.target.value); setSearchFocusedIndex(-1); }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'ArrowDown') {
+                      e.preventDefault();
+                      const newIndex = searchFocusedIndex < products.length - 1 ? searchFocusedIndex + 1 : searchFocusedIndex;
+                      setSearchFocusedIndex(newIndex);
+                      // Scroll to keep the focused item visible
+                      setTimeout(() => {
+                        const focusedRow = productTableBodyRef.current?.children[newIndex];
+                        if (focusedRow) {
+                          focusedRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                        }
+                      }, 0);
+                    } else if (e.key === 'ArrowUp') {
+                      e.preventDefault();
+                      const newIndex = searchFocusedIndex > 0 ? searchFocusedIndex - 1 : searchFocusedIndex;
+                      setSearchFocusedIndex(newIndex);
+                      // Scroll to keep the focused item visible
+                      setTimeout(() => {
+                        const focusedRow = productTableBodyRef.current?.children[newIndex];
+                        if (focusedRow) {
+                          focusedRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                        }
+                      }, 0);
+                    } else if (e.key === 'Enter') {
+                      e.preventDefault();
+                      if (searchFocusedIndex >= 0 && products[searchFocusedIndex]) {
+                        const product = products[searchFocusedIndex];
+                        const inCartItem = activeTab?.cart?.find(item => item.id === product.id);
+                        const remainingQty = product.stock_quantity - (inCartItem ? inCartItem.quantity : 0);
+                        if (remainingQty > 0) {
+                          addToCart(product);
+                        }
                       }
                     }
-                  }
-                }}
-                className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm font-medium"
-              />
-              <svg className="absolute left-3.5 top-3.5 w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
+                  }}
+                  className="w-full pl-10 pr-9 py-3 bg-white border border-slate-200 rounded-xl shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm font-medium"
+                />
+                <svg className="absolute left-3.5 top-3.5 w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                {search && (
+                  <button
+                    type="button"
+                    onClick={() => { setSearch(''); searchInputRef.current?.focus(); }}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 rounded-full hover:bg-slate-100 text-xs font-bold transition-colors"
+                    title="Clear search"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+
+              {/* ── Voice Assistant Button Beside Search Options ── */}
+              {voiceSupported && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (voiceListening) stopVoiceListening();
+                    else startVoiceListening();
+                  }}
+                  className={`h-[46px] px-3.5 rounded-xl font-bold text-xs shadow-xs transition-all flex items-center space-x-1.5 border flex-shrink-0 cursor-pointer ${
+                    voiceListening
+                      ? 'bg-red-600 hover:bg-red-700 text-white border-red-700 shadow-red-300 shadow-sm animate-pulse ring-2 ring-red-400'
+                      : 'bg-violet-50 hover:bg-violet-100 text-violet-800 border-violet-300 hover:border-violet-400 active:scale-95'
+                  }`}
+                  title={voiceListening ? 'Stop Voice Search (Alt+V)' : 'Start Voice Search (Alt+V)'}
+                >
+                  <svg className={`w-4 h-4 ${voiceListening ? 'text-white' : 'text-violet-600'}`} fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
+                    <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
+                  </svg>
+                  <span className="hidden sm:inline">{voiceListening ? 'Listening...' : 'Voice (Alt+V)'}</span>
+                  <span className="sm:hidden">{voiceListening ? 'Rec' : 'Voice'}</span>
+                  {voiceContinuous && (
+                    <span className="bg-emerald-500/30 text-emerald-700 border border-emerald-500/40 text-[9px] px-1 py-0.5 rounded font-bold ml-0.5">
+                      AUTO
+                    </span>
+                  )}
+                </button>
+              )}
             </div>
 
             {/* Barcode Scanner Console */}
@@ -1816,6 +2182,28 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
                             exp.setHours(0, 0, 0, 0);
                             if (exp.getTime() < today.getTime()) return false;
                           }
+
+                          // If search query is active: "if three letters match, all will show"
+                          if (search && search.trim()) {
+                            const cleanSearch = search.trim().toLowerCase();
+                            const pName = (p.name || '').toLowerCase();
+                            const pBarcode = (p.barcode || '').toLowerCase();
+                            const pSku = (p.sku || '').toLowerCase();
+                            const pCat = (p.category_name || p.category || '').toLowerCase();
+
+                            // 1. Direct containment
+                            if (pName.includes(cleanSearch) || pBarcode.includes(cleanSearch) || pSku.includes(cleanSearch) || pCat.includes(cleanSearch)) {
+                              return true;
+                            }
+
+                            // 2. 3-Letter matching rule: if 3 letters match anywhere, it will show!
+                            if (cleanSearch.length >= 3) {
+                              if (hasThreeLetterMatch(cleanSearch, pName) || hasThreeLetterMatch(cleanSearch, pBarcode) || hasThreeLetterMatch(cleanSearch, pSku)) {
+                                return true;
+                              }
+                            }
+                          }
+
                           return true;
                         });
 

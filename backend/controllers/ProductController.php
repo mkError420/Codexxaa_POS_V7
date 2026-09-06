@@ -72,11 +72,34 @@ class ProductController {
                 }
 
                 if (!empty($search)) {
-                    $sql .= " AND (p.name LIKE ? OR p.sku LIKE ? OR p.category LIKE ? OR s.name LIKE ?)";
-                    $params[] = "%$search%";
-                    $params[] = "%$search%";
-                    $params[] = "%$search%";
-                    $params[] = "%$search%";
+                    $cleanSearch = strtolower(trim($search));
+                    $aliases = [
+                        'cok' => 'coca cola', 'coke' => 'coca cola', 'coak' => 'coca cola',
+                        'pep' => 'pepsi', 'pepcy' => 'pepsi', 'pepsy' => 'pepsi',
+                        'spr' => 'sprite', 'spirite' => 'sprite', 'sprit' => 'sprite',
+                        'kit' => 'kitkat', 'kit kat' => 'kitkat',
+                        'app' => 'apple', 'mil' => 'milk', 'chi' => 'chicken',
+                        'biskut' => 'biscuit', 'biskit' => 'biscuit', 'nudels' => 'noodles',
+                        'deem' => 'egg', 'dim' => 'egg', 'murgi' => 'chicken',
+                        'aloo' => 'potato', 'alu' => 'potato', 'peyaj' => 'onion',
+                        'cha' => 'tea', 'chai' => 'tea', 'dudh' => 'milk', 'pani' => 'water',
+                    ];
+                    $expanded = isset($aliases[$cleanSearch]) ? $aliases[$cleanSearch] : null;
+
+                    if ($expanded) {
+                        $sql .= " AND (p.name LIKE ? OR p.sku LIKE ? OR p.category LIKE ? OR s.name LIKE ? OR p.name LIKE ?)";
+                        $params[] = "%$search%";
+                        $params[] = "%$search%";
+                        $params[] = "%$search%";
+                        $params[] = "%$search%";
+                        $params[] = "%$expanded%";
+                    } else {
+                        $sql .= " AND (p.name LIKE ? OR p.sku LIKE ? OR p.category LIKE ? OR s.name LIKE ?)";
+                        $params[] = "%$search%";
+                        $params[] = "%$search%";
+                        $params[] = "%$search%";
+                        $params[] = "%$search%";
+                    }
                 }
 
                 if ($supplierIdParam !== null && $supplierIdParam !== '') {
@@ -169,11 +192,34 @@ class ProductController {
                 }
 
                 if (!empty($search)) {
-                    $sql .= " AND (p.name LIKE ? OR p.sku LIKE ? OR p.category LIKE ? OR s.name LIKE ?)";
-                    $params[] = "%$search%";
-                    $params[] = "%$search%";
-                    $params[] = "%$search%";
-                    $params[] = "%$search%";
+                    $cleanSearch = strtolower(trim($search));
+                    $aliases = [
+                        'cok' => 'coca cola', 'coke' => 'coca cola', 'coak' => 'coca cola',
+                        'pep' => 'pepsi', 'pepcy' => 'pepsi', 'pepsy' => 'pepsi',
+                        'spr' => 'sprite', 'spirite' => 'sprite', 'sprit' => 'sprite',
+                        'kit' => 'kitkat', 'kit kat' => 'kitkat',
+                        'app' => 'apple', 'mil' => 'milk', 'chi' => 'chicken',
+                        'biskut' => 'biscuit', 'biskit' => 'biscuit', 'nudels' => 'noodles',
+                        'deem' => 'egg', 'dim' => 'egg', 'murgi' => 'chicken',
+                        'aloo' => 'potato', 'alu' => 'potato', 'peyaj' => 'onion',
+                        'cha' => 'tea', 'chai' => 'tea', 'dudh' => 'milk', 'pani' => 'water',
+                    ];
+                    $expanded = isset($aliases[$cleanSearch]) ? $aliases[$cleanSearch] : null;
+
+                    if ($expanded) {
+                        $sql .= " AND (p.name LIKE ? OR p.sku LIKE ? OR p.category LIKE ? OR s.name LIKE ? OR p.name LIKE ?)";
+                        $params[] = "%$search%";
+                        $params[] = "%$search%";
+                        $params[] = "%$search%";
+                        $params[] = "%$search%";
+                        $params[] = "%$expanded%";
+                    } else {
+                        $sql .= " AND (p.name LIKE ? OR p.sku LIKE ? OR p.category LIKE ? OR s.name LIKE ?)";
+                        $params[] = "%$search%";
+                        $params[] = "%$search%";
+                        $params[] = "%$search%";
+                        $params[] = "%$search%";
+                    }
                 }
 
                 if ($supplierIdParam !== null && $supplierIdParam !== '') {
