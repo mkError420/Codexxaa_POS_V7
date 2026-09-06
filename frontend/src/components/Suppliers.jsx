@@ -1009,6 +1009,8 @@ export default function Suppliers() {
   const [masterSupplierNames, setMasterSupplierNames] = useState([]);
   // Distinct categories from super admin Supplier Products Catalog
   const [masterCategories, setMasterCategories] = useState([]);
+  // All master catalog products from super admin Supplier Products Catalog
+  const [allMasterCatalogProducts, setAllMasterCatalogProducts] = useState([]);
 
   // Fetch all distinct supplier names from the master catalog (super admin)
   const fetchMasterSupplierNames = async () => {
@@ -1054,6 +1056,26 @@ export default function Suppliers() {
     }
   };
 
+  // Fetch full super admin Supplier Products Catalog for AI Vision Auto-Scan
+  const fetchAllMasterCatalog = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`${API_BASE_URL}/master-supplier-products`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      const list = Array.isArray(data) ? data : (data.data || []);
+      if (Array.isArray(list) && list.length > 0) {
+        setAllMasterCatalogProducts(list);
+        if (!supplierSearch.trim()) {
+          setMasterCatalogProducts(list);
+        }
+      }
+    } catch (e) {
+      // silently fail
+    }
+  };
+
   const openAddPo = (supplierId = '') => {
     const existingSupplier = suppliers.find(s => String(s.id) === String(supplierId));
     const supName = existingSupplier ? existingSupplier.name : '';
@@ -1065,6 +1087,7 @@ export default function Suppliers() {
     fetchMasterSupplierNames();
     fetchMasterCategories();
     fetchMasterCatalogForSupplier(supName);
+    fetchAllMasterCatalog();
     setIsEditPoMode(false);
     setPoCart([]);
     setEditingCartItemIndex(null);
@@ -1200,7 +1223,7 @@ export default function Suppliers() {
     const lower = text.toLowerCase();
     const companyMappings = [
       { key: 'beximco', name: 'Beximco Pharmaceuticals Ltd.' },
-      { key: 'square', name: 'Square Pharmaceuticals PLC Gazipur' },
+      { key: 'square', name: 'Square Pharmaceuticals PLC' },
       { key: 'incepta', name: 'Incepta Pharmaceuticals Ltd.' },
       { key: 'renata', name: 'Renata Limited' },
       { key: 'aci', name: 'ACI Limited' },
@@ -1221,6 +1244,14 @@ export default function Suppliers() {
     const found = companyMappings.find(c => lower.includes(c.key));
     if (found) return found.name;
 
+    // Check distinct supplier names from Super Admin Supplier Products Catalog
+    const matchedFromCatalog = masterSupplierNames.find(n => n && lower.includes(n.toLowerCase()));
+    if (matchedFromCatalog) return matchedFromCatalog;
+
+    // Check items in allMasterCatalogProducts
+    const matchedMasterItem = allMasterCatalogProducts.find(m => m.supplier_name && lower.includes(m.supplier_name.toLowerCase()));
+    if (matchedMasterItem) return matchedMasterItem.supplier_name;
+
     // Also check current suppliers list
     const matchedFromSuppliers = suppliers.find(s => s.name && lower.includes(s.name.toLowerCase()));
     if (matchedFromSuppliers) return matchedFromSuppliers.name;
@@ -1228,12 +1259,19 @@ export default function Suppliers() {
     return '';
   };
 
-  // Vision Auto-Scan Handler for Purchase Order (Auto-fills Company, Product, Category, Price, SKU)
+  // Vision Auto-Scan Handler for Purchase Order (Auto-fills Company, Product, Category, Price, SKU from Super Admin Supplier Products Catalog)
   const handlePoVisionProductSelect = async (matchedProduct, scanMeta) => {
     if (!matchedProduct) return;
 
+    // Look for full details in super admin Supplier Products Catalog (allMasterCatalogProducts or masterCatalogProducts)
+    const combinedCatalog = [...allMasterCatalogProducts, ...masterCatalogProducts];
+    const catalogMatch = combinedCatalog.find(cp =>
+      cp.product_name && matchedProduct.name &&
+      cp.product_name.trim().toLowerCase() === matchedProduct.name.trim().toLowerCase()
+    );
+
     // 1. Identify Company / Supplier Name
-    let companyName = matchedProduct.supplier_name || '';
+    let companyName = matchedProduct.supplier_name || (catalogMatch ? catalogMatch.supplier_name : '');
     if (!companyName && scanMeta?.detectedText) {
       companyName = findCompanyInText(scanMeta.detectedText);
     }
@@ -1248,7 +1286,7 @@ export default function Suppliers() {
         setSupplierSearch(matchedSupplier.name);
         setPoFormData(prev => ({ ...prev, supplier_id: String(matchedSupplier.id) }));
       } else {
-        // Auto create new supplier locally
+        // Auto create new supplier locally so it's seamlessly added to the shop
         const created = await createOrGetSupplier(companyName.trim());
         if (created) {
           setSupplierSearch(created.name);
@@ -1258,13 +1296,24 @@ export default function Suppliers() {
     }
 
     // 2. Set Product Name & Search
-    setProductSearch(matchedProduct.name);
+    const finalProductName = matchedProduct.name || (catalogMatch ? catalogMatch.product_name : '');
+    setProductSearch(finalProductName);
 
-    // 3. Set Category, Cost Price, Selling Price, and SKU
-    const sp = parseFloat(matchedProduct.price || 0);
-    const cp = (matchedProduct.cost_price !== undefined && matchedProduct.cost_price !== null && parseFloat(matchedProduct.cost_price) > 0)
-      ? parseFloat(matchedProduct.cost_price)
-      : parseFloat((sp > 0 ? (sp * 0.85).toFixed(2) : '0')); // 15% standard margin fallback
+    // 3. Category from Master Catalog or local
+    const finalCategory = matchedProduct.category || (catalogMatch ? catalogMatch.category : '') || 'Medicine';
+
+    // 4. Find if this product exists locally in shop inventory to reuse ID and price
+    const localProduct = productsList.find(p => p.name && p.name.trim().toLowerCase() === finalProductName.trim().toLowerCase());
+
+    const sp = localProduct && parseFloat(localProduct.price) > 0
+      ? parseFloat(localProduct.price)
+      : parseFloat(matchedProduct.price || 35);
+
+    const cp = localProduct && parseFloat(localProduct.cost_price) > 0
+      ? parseFloat(localProduct.cost_price)
+      : (matchedProduct.cost_price !== undefined && matchedProduct.cost_price !== null && parseFloat(matchedProduct.cost_price) > 0)
+        ? parseFloat(matchedProduct.cost_price)
+        : parseFloat((sp > 0 ? (sp * 0.85).toFixed(2) : '29.75'));
 
     let calculatedPct = '';
     if (sp > 0 && cp >= 0) {
@@ -1274,21 +1323,26 @@ export default function Suppliers() {
 
     setPoFormData(prev => ({
       ...prev,
-      product_id: String(matchedProduct.id || ''),
-      is_new: !matchedProduct.id,
-      name: matchedProduct.name,
-      sku: matchedProduct.sku || scanMeta?.detectedBarcode || prev.sku || '',
-      category: matchedProduct.category || prev.category || 'Medicine',
+      product_id: localProduct ? String(localProduct.id) : (matchedProduct.id ? String(matchedProduct.id) : ''),
+      is_new: !localProduct && !matchedProduct.id,
+      name: finalProductName,
+      sku: (localProduct && localProduct.sku) || matchedProduct.sku || scanMeta?.detectedBarcode || prev.sku || '',
+      category: finalCategory,
       cost_price: String(cp || ''),
       selling_price: String(sp || ''),
       discount_percent: calculatedPct,
       quantity_ordered: prev.quantity_ordered || 1,
-      unit: matchedProduct.unit || prev.unit || 'piece',
-      expiry_date: matchedProduct.expiry_date || prev.expiry_date || ''
+      unit: (localProduct && localProduct.unit) || matchedProduct.unit || prev.unit || 'piece',
+      expiry_date: (localProduct && localProduct.expiry_date) || matchedProduct.expiry_date || prev.expiry_date || ''
     }));
 
+    // Close all suggestion dropdowns cleanly
+    setShowSupplierSuggestions(false);
+    setShowProductSuggestions(false);
+    setShowMasterProductSuggestions(false);
+
     setShowPoVisionModal(false);
-    triggerAlert('success', `Vision Scanned: "${matchedProduct.name}" • Company: ${companyName || 'Set'} • Price: ৳${sp.toFixed(2)}`);
+    triggerAlert('success', `AI Vision Connected: "${finalProductName}" • Company: ${companyName || 'Verified Supplier'} • Category: ${finalCategory} • Auto-filled into Purchase Order`);
   };
 
   const openEditPo = async (po) => {
@@ -5310,6 +5364,7 @@ export default function Suppliers() {
         isOpen={showPoVisionModal}
         onClose={() => setShowPoVisionModal(false)}
         products={productsList}
+        masterCatalogProducts={allMasterCatalogProducts.length > 0 ? allMasterCatalogProducts : masterCatalogProducts}
         onSelectProduct={handlePoVisionProductSelect}
         mode="purchase_order"
         title="Vision Auto-Scan for Purchase Order"
@@ -6234,7 +6289,10 @@ export default function Suppliers() {
 
                   <button
                     type="button"
-                    onClick={() => setShowPoVisionModal(true)}
+                    onClick={() => {
+                      fetchAllMasterCatalog();
+                      setShowPoVisionModal(true);
+                    }}
                     className="px-3 py-1.5 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white font-bold rounded-lg text-xs shadow-md shadow-indigo-600/30 active:scale-95 transition-all flex items-center gap-1.5 flex-shrink-0"
                     title="Open Vision Auto-Scan (Alt+C)"
                   >

@@ -699,15 +699,17 @@ export function renderVisionOverlay(canvas, videoElement, mode = 'standard') {
 
 /**
  * Matches extracted OCR text, Barcode, and Visual Features against store inventory
+ * AND Super Admin Supplier Products Catalog
  */
 export function matchProductComprehensive({
   ocrText = '',
   barcode = '',
   features = null,
   inventoryProducts = [],
+  masterCatalogProducts = [],
   customTrained = []
 }) {
-  if (!inventoryProducts || inventoryProducts.length === 0) return [];
+  if ((!inventoryProducts || inventoryProducts.length === 0) && (!masterCatalogProducts || masterCatalogProducts.length === 0)) return [];
 
   const candidates = [];
   const normalizedOcr = (ocrText || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ');
@@ -729,8 +731,8 @@ export function matchProductComprehensive({
     }
   }
 
-  // 2. OPTICAL CHARACTER RECOGNITION (OCR) TEXT & BRAND MATCHING
-  if (ocrWords.length > 0) {
+  // 2. OPTICAL CHARACTER RECOGNITION (OCR) MATCHING AGAINST LOCAL INVENTORY
+  if (ocrWords.length > 0 && inventoryProducts.length > 0) {
     for (const prod of inventoryProducts) {
       const prodName = (prod.name || '').toLowerCase();
       const prodSku = (prod.sku || '').toLowerCase();
@@ -745,7 +747,6 @@ export function matchProductComprehensive({
         score = 98;
         matchReason = `Optical Brand Name Match: "${prod.name}"`;
       } else {
-        // Split product name into words and check overlap
         const nameTokens = prodName.split(/[\s\-\_\(\)\/]+/).filter(t => t.length >= 2);
         let tokenMatches = 0;
 
@@ -768,7 +769,6 @@ export function matchProductComprehensive({
       }
 
       if (score >= 60) {
-        // Prevent duplicate
         if (!candidates.some(c => c.product.id === prod.id)) {
           candidates.push({
             product: prod,
@@ -783,7 +783,108 @@ export function matchProductComprehensive({
     }
   }
 
-  // 3. USER-TRAINED VISUAL TEMPLATES
+  // 3. OPTICAL CHARACTER RECOGNITION MATCHING AGAINST SUPER ADMIN "SUPPLIER PRODUCTS CATALOG"
+  if (ocrWords.length > 0 && masterCatalogProducts.length > 0) {
+    const genericModifiers = new Set(['tablet', 'tablets', 'capsule', 'capsules', 'syrup', 'suspension', 'drops', 'mg', 'ml', 'gm', 'injection', 'inhaler', 'cream', 'gel', 'ointment']);
+
+    for (const masterItem of masterCatalogProducts) {
+      const mName = (masterItem.product_name || '').toLowerCase().trim();
+      const mSupplier = (masterItem.supplier_name || '').toLowerCase().trim();
+      const mCategory = (masterItem.category || '').toLowerCase().trim();
+
+      if (!mName) continue;
+
+      let score = 0;
+      let matchReason = '';
+
+      const tokens = mName.split(/[\s\-\_\(\)\/]+/).filter(t => t.length >= 2);
+      const brandToken = tokens.find(t => !genericModifiers.has(t) && t.length >= 3) || tokens[0];
+
+      // Exact full name match in OCR text
+      if (normalizedOcr.includes(mName) || (mName.length >= 3 && ocrWords.includes(mName))) {
+        score = 98;
+        matchReason = `Super Admin Catalog Match: "${masterItem.product_name}" (${masterItem.supplier_name || 'Verified Supplier'})`;
+      } 
+      // Primary brand token match (e.g. "napa" from "Napa 500mg Tablet")
+      else if (brandToken && (ocrWords.includes(brandToken) || normalizedOcr.includes(brandToken))) {
+        let matchedModifierCount = 0;
+        let totalModifiers = 0;
+        for (const t of tokens) {
+          if (t !== brandToken) {
+            totalModifiers++;
+            if (ocrWords.includes(t) || normalizedOcr.includes(t)) {
+              matchedModifierCount++;
+            }
+          }
+        }
+        score = 82 + (totalModifiers > 0 ? Math.round((matchedModifierCount / totalModifiers) * 16) : 8);
+        matchReason = `Catalog Brand Match: "${masterItem.product_name}" (${masterItem.supplier_name || 'Verified Supplier'})`;
+      } else {
+        let matchCount = 0;
+        for (const t of tokens) {
+          if (ocrWords.includes(t) || normalizedOcr.includes(t)) {
+            matchCount++;
+          }
+        }
+        if (matchCount > 0 && matchCount >= Math.ceil(tokens.length * 0.5)) {
+          score = Math.round(70 + (matchCount / tokens.length) * 25);
+          matchReason = `Catalog Keyword Match: "${masterItem.product_name}" (${masterItem.supplier_name || ''})`;
+        }
+      }
+
+      // Bonus if supplier name (e.g. "Beximco" or "Square") is also detected in OCR
+      if (score >= 70 && mSupplier) {
+        const supTokens = mSupplier.split(/[\s\-\_\(\)\,\.]+/).filter(t => t.length >= 3 && !['ltd', 'plc', 'pharmaceuticals', 'laboratories', 'industry', 'limited'].includes(t));
+        const hasSupMatch = supTokens.some(st => normalizedOcr.includes(st) || ocrWords.includes(st));
+        if (hasSupMatch) {
+          score = Math.min(100, score + 12);
+          matchReason += ` • Company Confirmed: ${masterItem.supplier_name}`;
+        }
+      }
+
+      if (score >= 70) {
+        // Look up if shop already has this product in inventory
+        const existingLocal = inventoryProducts.find(p => (p.name || '').toLowerCase() === mName);
+
+        const defaultPrice = masterItem.price ? parseFloat(masterItem.price) : 35;
+        const defaultCost = masterItem.cost_price ? parseFloat(masterItem.cost_price) : (defaultPrice * 0.85);
+
+        const combinedProduct = {
+          id: existingLocal ? existingLocal.id : null,
+          name: masterItem.product_name,
+          supplier_name: masterItem.supplier_name || (existingLocal ? existingLocal.supplier_name : ''),
+          category: masterItem.category || (existingLocal ? existingLocal.category : 'Medicine'),
+          price: existingLocal && parseFloat(existingLocal.price) > 0 ? parseFloat(existingLocal.price) : defaultPrice,
+          cost_price: existingLocal && parseFloat(existingLocal.cost_price) > 0 ? parseFloat(existingLocal.cost_price) : defaultCost,
+          sku: existingLocal ? existingLocal.sku : '',
+          stock_quantity: existingLocal ? existingLocal.stock_quantity : 0,
+          unit: existingLocal ? existingLocal.unit : 'piece',
+          is_master_catalog: true
+        };
+
+        const exists = candidates.findIndex(c => (c.product.name || '').toLowerCase() === mName);
+        if (exists >= 0) {
+          if (score > candidates[exists].confidence || !candidates[exists].product.supplier_name) {
+            candidates[exists].product.supplier_name = combinedProduct.supplier_name;
+            candidates[exists].product.category = combinedProduct.category;
+            candidates[exists].confidence = Math.max(candidates[exists].confidence, score);
+            candidates[exists].reason = matchReason;
+          }
+        } else {
+          candidates.push({
+            product: combinedProduct,
+            confidence: score,
+            matchType: 'master_catalog',
+            reason: matchReason,
+            colorName: masterItem.supplier_name || 'Super Admin Catalog',
+            icon: '🏢'
+          });
+        }
+      }
+    }
+  }
+
+  // 4. USER-TRAINED VISUAL TEMPLATES
   const trainedList = customTrained.length > 0 ? customTrained : getTrainedTemplates();
   if (features) {
     for (const template of trainedList) {
@@ -825,7 +926,7 @@ export function matchProductComprehensive({
     }
   }
 
-  // 4. PRESET PRODUCE / ITEM SIGNATURES
+  // 5. PRESET PRODUCE / ITEM SIGNATURES
   if (features) {
     for (const preset of PRESET_PRODUCT_PROFILES) {
       let hueMatch = false;

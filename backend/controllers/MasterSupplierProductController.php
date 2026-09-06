@@ -33,6 +33,49 @@ class MasterSupplierProductController {
             if ($stmt->rowCount() === 0) {
                 $pdo->exec("ALTER TABLE `master_supplier_products` ADD COLUMN `category` VARCHAR(255) NULL AFTER `product_name`");
             }
+
+            // Seed initial popular products if table is empty
+            $countStmt = $pdo->query("SELECT COUNT(*) FROM `master_supplier_products`");
+            if ($countStmt && (int)$countStmt->fetchColumn() === 0) {
+                $seedSql = "INSERT IGNORE INTO `master_supplier_products` (`supplier_name`, `product_name`, `category`) VALUES
+                    ('Beximco Pharmaceuticals Ltd.', 'Napa 500mg Tablet', 'Tablet'),
+                    ('Beximco Pharmaceuticals Ltd.', 'Napa Extra Tablet', 'Tablet'),
+                    ('Beximco Pharmaceuticals Ltd.', 'Napa Rapid Tablet', 'Tablet'),
+                    ('Beximco Pharmaceuticals Ltd.', 'Napa Extend Tablet', 'Tablet'),
+                    ('Beximco Pharmaceuticals Ltd.', 'Napa Syrup 60ml', 'Syrup'),
+                    ('Beximco Pharmaceuticals Ltd.', 'Napa Suspension 60ml', 'Suspension'),
+                    ('Beximco Pharmaceuticals Ltd.', 'Napa Drops 15ml', 'Pediatric Drops'),
+                    ('Beximco Pharmaceuticals Ltd.', 'Napa One 1000mg Tablet', 'Tablet'),
+                    ('Beximco Pharmaceuticals Ltd.', 'Neoceptin R 150mg Tablet', 'Tablet'),
+                    ('Beximco Pharmaceuticals Ltd.', 'Bexitrol F Inhaler', 'Inhaler'),
+                    ('Beximco Pharmaceuticals Ltd.', 'Proceptin 20mg Capsule', 'Capsule'),
+                    ('Beximco Pharmaceuticals Ltd.', 'Azithrocin 500mg Tablet', 'Tablet'),
+                    ('Square Pharmaceuticals PLC', 'Ace 500mg Tablet', 'Tablet'),
+                    ('Square Pharmaceuticals PLC', 'Ace Plus Tablet', 'Tablet'),
+                    ('Square Pharmaceuticals PLC', 'Ace Syrup 60ml', 'Syrup'),
+                    ('Square Pharmaceuticals PLC', 'Seclo 20mg Capsule', 'Capsule'),
+                    ('Square Pharmaceuticals PLC', 'Filmet 400mg Tablet', 'Tablet'),
+                    ('Square Pharmaceuticals PLC', 'Ceevit 250mg Chewable Tablet', 'Vitamin'),
+                    ('Square Pharmaceuticals PLC', 'Tofen 1mg Tablet', 'Tablet'),
+                    ('Square Pharmaceuticals PLC', 'Alarid 10mg Tablet', 'Tablet'),
+                    ('Incepta Pharmaceuticals Ltd.', 'Pantonix 20mg Tablet', 'Tablet'),
+                    ('Incepta Pharmaceuticals Ltd.', 'Osartil 50mg Tablet', 'Tablet'),
+                    ('Incepta Pharmaceuticals Ltd.', 'Alatrol 10mg Tablet', 'Tablet'),
+                    ('Incepta Pharmaceuticals Ltd.', 'Monas 10mg Tablet', 'Tablet'),
+                    ('Renata Limited', 'Maxpro 20mg Capsule', 'Capsule'),
+                    ('Renata Limited', 'Rolac 10mg Tablet', 'Tablet'),
+                    ('Renata Limited', 'Furocef 500mg Tablet', 'Antibiotic'),
+                    ('The ACME Laboratories Ltd.', 'Fast 500mg Tablet', 'Tablet'),
+                    ('The ACME Laboratories Ltd.', 'Monikast 10mg Tablet', 'Tablet'),
+                    ('ACI Limited', 'Parapyrol 500mg Tablet', 'Tablet'),
+                    ('ACI Limited', 'Fluclox 500mg Capsule', 'Antibiotic'),
+                    ('Aristopharma Ltd.', 'Afun 150mg Capsule', 'Antifungal'),
+                    ('Aristopharma Ltd.', 'Lodipin 5mg Tablet', 'Tablet'),
+                    ('Opsonin Pharma Ltd.', 'Finix 20mg Tablet', 'Tablet'),
+                    ('Healthcare Pharmaceuticals Ltd.', 'Sergel 20mg Capsule', 'Capsule'),
+                    ('Eskayef Pharmaceuticals Ltd.', 'Losectil 20mg Capsule', 'Capsule');";
+                $pdo->exec($seedSql);
+            }
         } catch (\Exception $e) {
             error_log("Failed to ensure master_supplier_products table: " . $e->getMessage());
         }

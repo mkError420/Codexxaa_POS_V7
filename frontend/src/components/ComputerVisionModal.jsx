@@ -15,6 +15,7 @@ export default function ComputerVisionModal({
   isOpen,
   onClose,
   products = [],
+  masterCatalogProducts = [],
   onAddToCart,
   onSelectProduct,
   mode = 'pos', // 'pos' | 'purchase_order' | 'general'
@@ -180,6 +181,7 @@ export default function ComputerVisionModal({
         barcode: barcode || '',
         features: features,
         inventoryProducts: products,
+        masterCatalogProducts: masterCatalogProducts,
         customTrained: trainedTemplates
       });
 
@@ -207,7 +209,7 @@ export default function ComputerVisionModal({
     } finally {
       setIsOcrProcessing(false);
     }
-  }, [products, trainedTemplates, autoAddEnabled, confidenceThreshold, mode, onSelectProduct, onAddToCart]);
+  }, [products, masterCatalogProducts, trainedTemplates, autoAddEnabled, confidenceThreshold, mode, onSelectProduct, onAddToCart]);
 
   // 6. Live Periodic Stream Analysis
   useEffect(() => {
@@ -225,6 +227,7 @@ export default function ComputerVisionModal({
           barcode: detectedBarcode,
           features: features,
           inventoryProducts: products,
+          masterCatalogProducts: masterCatalogProducts,
           customTrained: trainedTemplates
         });
         if (matches.length > 0) {
@@ -243,7 +246,7 @@ export default function ComputerVisionModal({
       if (liveIntervalRef.current) clearInterval(liveIntervalRef.current);
       if (ocrIntervalRef.current) clearInterval(ocrIntervalRef.current);
     };
-  }, [isOpen, isFrozen, detectedText, detectedBarcode, products, trainedTemplates, performDeepAnalysis]);
+  }, [isOpen, isFrozen, detectedText, detectedBarcode, products, masterCatalogProducts, trainedTemplates, performDeepAnalysis]);
 
   // 7. Handle Adding Product to Cart (for POS Checkout)
   const handleAddProductToCart = (product, qty = 1, confidence = 0) => {
