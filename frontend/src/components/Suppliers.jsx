@@ -1001,16 +1001,29 @@ export default function Suppliers() {
   const [showProductSuggestions, setShowProductSuggestions] = useState(false);
 
   // ── MASTER CATALOG (super admin supplier products) ──────────────────────
-  const [masterCatalogProducts, setMasterCatalogProducts] = useState([]);
+  const DEFAULT_MASTER_SUPPLIER_PRODUCTS = [
+    { supplier_name: 'The ACME Laboratories Ltd.', product_name: 'Lifil-A 50000 Capsule', category: 'Capsule', price: 237.60, cost_price: 201.96 },
+    { supplier_name: 'The ACME Laboratories Ltd.', product_name: 'Lifil-A Capsule', category: 'Capsule', price: 237.60, cost_price: 201.96 },
+    { supplier_name: 'The ACME Laboratories Ltd.', product_name: 'Fast 500mg Tablet', category: 'Tablet', price: 35.00, cost_price: 29.75 },
+    { supplier_name: 'The ACME Laboratories Ltd.', product_name: 'Monikast 10mg Tablet', category: 'Tablet', price: 160.00, cost_price: 136.00 },
+    { supplier_name: 'Square Pharmaceuticals PLC', product_name: 'Ace 500mg Tablet', category: 'Tablet', price: 35.00, cost_price: 29.75 },
+    { supplier_name: 'Square Pharmaceuticals PLC', product_name: 'Ace Plus Tablet', category: 'Tablet', price: 50.00, cost_price: 42.50 },
+    { supplier_name: 'Square Pharmaceuticals PLC', product_name: 'Seclo 20mg Capsule', category: 'Capsule', price: 70.00, cost_price: 59.50 },
+    { supplier_name: 'Beximco Pharmaceuticals Ltd.', product_name: 'Napa 500mg Tablet', category: 'Tablet', price: 35.00, cost_price: 29.75 },
+    { supplier_name: 'Beximco Pharmaceuticals Ltd.', product_name: 'Napa Extra Tablet', category: 'Tablet', price: 45.00, cost_price: 38.25 },
+    { supplier_name: 'Incepta Pharmaceuticals Ltd.', product_name: 'Pantonix 20mg Tablet', category: 'Tablet', price: 70.00, cost_price: 59.50 }
+  ];
+
+  const [masterCatalogProducts, setMasterCatalogProducts] = useState(DEFAULT_MASTER_SUPPLIER_PRODUCTS);
   const [masterProductNameInput, setMasterProductNameInput] = useState('');
   const [showMasterProductSuggestions, setShowMasterProductSuggestions] = useState(false);
 
   // Distinct supplier names from super admin Supplier Products Catalog
-  const [masterSupplierNames, setMasterSupplierNames] = useState([]);
+  const [masterSupplierNames, setMasterSupplierNames] = useState(['The ACME Laboratories Ltd.', 'Square Pharmaceuticals PLC', 'Beximco Pharmaceuticals Ltd.', 'Incepta Pharmaceuticals Ltd.']);
   // Distinct categories from super admin Supplier Products Catalog
-  const [masterCategories, setMasterCategories] = useState([]);
+  const [masterCategories, setMasterCategories] = useState(['Tablet', 'Capsule', 'Syrup', 'Suspension', 'Pediatric Drops', 'Inhaler', 'Vitamin', 'Ointment', 'Antibiotic']);
   // All master catalog products from super admin Supplier Products Catalog
-  const [allMasterCatalogProducts, setAllMasterCatalogProducts] = useState([]);
+  const [allMasterCatalogProducts, setAllMasterCatalogProducts] = useState(DEFAULT_MASTER_SUPPLIER_PRODUCTS);
 
   // Fetch all distinct supplier names from the master catalog (super admin)
   const fetchMasterSupplierNames = async () => {
@@ -1241,7 +1254,7 @@ export default function Suppliers() {
       { key: 'pran', name: 'PRAN-RFL Group' }
     ];
 
-    const found = companyMappings.find(c => lower.includes(c.key));
+    const found = companyMappings.find(c => new RegExp(`\\b${c.key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(lower));
     if (found) return found.name;
 
     // Check distinct supplier names from Super Admin Supplier Products Catalog

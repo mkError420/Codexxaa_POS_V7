@@ -309,9 +309,19 @@ export default function ComputerVisionModal({
       img.onload = () => {
         setIsFrozen(true);
         const canvas = canvasRef.current;
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        if (canvas) {
+          // Adjust canvas internal dimensions to match uploaded image aspect ratio while keeping clean display
+          const aspect = img.width / img.height;
+          if (aspect > 1) {
+            canvas.width = 640;
+            canvas.height = Math.round(640 / aspect);
+          } else {
+            canvas.height = 480;
+            canvas.width = Math.round(480 * aspect);
+          }
+          const ctx = canvas.getContext('2d', { willReadFrequently: true });
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        }
 
         playScanChime('capture');
         performDeepAnalysis(img);
@@ -319,6 +329,7 @@ export default function ComputerVisionModal({
       img.src = event.target.result;
     };
     reader.readAsDataURL(file);
+    e.target.value = '';
   };
 
   // 11. Snapshot Capture for Training
@@ -786,6 +797,12 @@ export default function ComputerVisionModal({
                             {(topMatch.product.stock_quantity || 0) > 0 ? `${topMatch.product.stock_quantity} available` : 'Out of stock'}
                           </span>
                         </div>
+                        {topMatch.product.expiry_date && (
+                          <div className="col-span-2 flex items-center justify-between border-t border-slate-800/80 pt-1 text-[10px]">
+                            <span className="text-slate-400 uppercase font-bold tracking-wider">Detected Expiry:</span>
+                            <span className="font-mono text-emerald-400 font-bold">{topMatch.product.expiry_date}</span>
+                          </div>
+                        )}
                       </div>
                     </div>
 

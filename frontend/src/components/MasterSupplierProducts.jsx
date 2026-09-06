@@ -22,6 +22,8 @@ export default function MasterSupplierProducts() {
 
   // Selection
   const [selected, setSelected] = useState([]);
+  const [selectAllPages, setSelectAllPages] = useState(false); // true when ALL pages are selected
+  const [loadingAllIds, setLoadingAllIds] = useState(false);
 
   // Alert
   const [alert, setAlert] = useState(null);
@@ -45,9 +47,13 @@ export default function MasterSupplierProducts() {
   const [csvUploading, setCsvUploading] = useState(false);
   const [csvErrors, setCsvErrors] = useState([]);
 
-  // Delete confirm
+  // Delete confirm (single)
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Bulk delete confirm
+  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
   // ------ Fetch Data ------
   const fetchItems = useCallback(async () => {
@@ -60,10 +66,10 @@ export default function MasterSupplierProducts() {
       const res = await fetch(url, { headers });
       const data = await res.json();
       if (data.data) {
-        setItems(data.data);
+        setItems(data.data.map(item => ({ ...item, id: Number(item.id) })));
         setTotal(data.total || 0);
       } else if (Array.isArray(data)) {
-        setItems(data);
+        setItems(data.map(item => ({ ...item, id: Number(item.id) })));
         setTotal(data.length);
       }
     } catch (e) {
@@ -182,29 +188,76 @@ export default function MasterSupplierProducts() {
     setDeleting(false);
   };
 
+  // ------ Fetch all IDs across all pages (for select all pages) ------
+  const fetchAllIds = async () => {
+    setLoadingAllIds(true);
+    try {
+      let url = `${API_BASE_URL}/master-supplier-products?ids_only=1`;
+      if (search) url += `&search=${encodeURIComponent(search)}`;
+      if (supplierFilter) url += `&supplier_name=${encodeURIComponent(supplierFilter)}`;
+      if (categoryFilter) url += `&category=${encodeURIComponent(categoryFilter)}`;
+      const res = await fetch(url, { headers });
+      const data = await res.json();
+      if (!res.ok) {
+        triggerAlert('error', `Failed to select all products: ${data.error || res.status}`);
+        setLoadingAllIds(false);
+        return;
+      }
+      if (Array.isArray(data.ids)) {
+        setSelected(data.ids.map(Number));
+        setSelectAllPages(true);
+      } else {
+        // Fallback: ids_only not supported, select current page only
+        triggerAlert('error', 'Server did not return IDs. Only current page is selected.');
+      }
+    } catch (e) {
+      triggerAlert('error', `Failed to select all products: ${e.message}`);
+    }
+    setLoadingAllIds(false);
+  };
+
   // ------ Bulk delete ------
-  const handleBulkDelete = async () => {
+  const handleBulkDelete = () => {
     if (selected.length === 0) return;
-    if (!window.confirm(`Delete ${selected.length} selected products?`)) return;
+    setShowBulkDeleteConfirm(true);
+  };
+
+  const confirmBulkDelete = async () => {
+    setBulkDeleting(true);
     try {
       const res = await fetch(`${API_BASE_URL}/master-supplier-products/bulk-delete`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ ids: selected })
       });
-      const d = await res.json();
+      // Safely parse response - server might return non-JSON on error
+      let d = {};
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        d = await res.json();
+      } else {
+        const text = await res.text();
+        console.error('Bulk delete non-JSON response:', res.status, text);
+        d = { error: `Server error (HTTP ${res.status}): ${text.substring(0, 150)}` };
+      }
       if (res.ok) {
-        triggerAlert('success', d.message || 'Deleted successfully.');
+        triggerAlert('success', d.message || `${selected.length} products deleted successfully.`);
         setSelected([]);
+        setSelectAllPages(false);
+        setShowBulkDeleteConfirm(false);
         fetchItems();
         fetchDistinctSuppliers();
         fetchDistinctCategories();
       } else {
-        triggerAlert('error', d.error || 'Bulk delete failed.');
+        triggerAlert('error', d.error || `Bulk delete failed (HTTP ${res.status}).`);
+        setShowBulkDeleteConfirm(false);
       }
     } catch (e) {
-      triggerAlert('error', 'Network error.');
+      console.error('Bulk delete fetch error:', e);
+      triggerAlert('error', `Delete failed: ${e.message}`);
+      setShowBulkDeleteConfirm(false);
     }
+    setBulkDeleting(false);
   };
 
   // ------ CSV parse & upload ------
@@ -293,8 +346,24 @@ export default function MasterSupplierProducts() {
   };
 
   // ------ Selection ------
-  const toggleSelect = (id) => setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
-  const toggleSelectAll = () => setSelected(selected.length === items.length ? [] : items.map(i => i.id));
+  const toggleSelect = (id) => {
+    const numId = Number(id);
+    setSelectAllPages(false);
+    setSelected(prev => prev.includes(numId) ? prev.filter(x => x !== numId) : [...prev, numId]);
+  };
+  const isCurrentPageFullySelected = items.length > 0 && items.every(i => selected.includes(Number(i.id)));
+  const toggleSelectAll = () => {
+    if (isCurrentPageFullySelected) {
+      // Deselect only current page items (keep others selected if cross-page)
+      const pageIds = items.map(i => Number(i.id));
+      setSelected(prev => prev.filter(id => !pageIds.includes(id)));
+      setSelectAllPages(false);
+    } else {
+      // Add all current page items to selection
+      const pageIds = items.map(i => Number(i.id));
+      setSelected(prev => Array.from(new Set([...prev, ...pageIds])));
+    }
+  };
 
   const totalPages = Math.ceil(total / ITEMS_PER_PAGE);
 
@@ -321,9 +390,30 @@ export default function MasterSupplierProducts() {
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             {selected.length > 0 && (
+              <div className="flex items-center gap-2 bg-rose-50 border border-rose-200 rounded-xl px-3 py-1.5">
+                <span className="text-sm font-semibold text-rose-700">
+                  {selectAllPages ? total : selected.length} selected
+                </span>
+                {!selectAllPages && total > selected.length && (
+                  <button
+                    onClick={fetchAllIds}
+                    disabled={loadingAllIds}
+                    className="text-xs text-indigo-600 font-bold underline underline-offset-2 hover:text-indigo-800 disabled:opacity-50 whitespace-nowrap"
+                  >
+                    {loadingAllIds ? 'Loading...' : `Select all ${total}`}
+                  </button>
+                )}
+                <button
+                  onClick={() => { setSelected([]); setSelectAllPages(false); }}
+                  className="text-xs text-slate-400 hover:text-slate-600 font-medium"
+                  title="Clear selection"
+                >✕</button>
+              </div>
+            )}
+            {selected.length > 0 && (
               <button onClick={handleBulkDelete} className="px-4 py-2 bg-rose-500 hover:bg-rose-600 text-white text-sm font-semibold rounded-xl transition-colors flex items-center gap-1.5 shadow">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                Delete {selected.length} Selected
+                Delete {selectAllPages ? `All ${total}` : selected.length}
               </button>
             )}
             <button onClick={handleExport} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-semibold rounded-xl transition-colors flex items-center gap-1.5">
@@ -409,9 +499,43 @@ export default function MasterSupplierProducts() {
         ) : (
           <table className="w-full text-sm">
             <thead className="bg-slate-50 border-b border-slate-100">
+              {/* Select-all-pages banner */}
+              {isCurrentPageFullySelected && totalPages > 1 && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-2.5 bg-indigo-50 border-b border-indigo-100">
+                    <div className="flex items-center justify-between gap-3 text-sm">
+                      {selectAllPages ? (
+                        <span className="text-indigo-700 font-semibold">
+                          ✓ All <strong>{total}</strong> products across all pages are selected.
+                        </span>
+                      ) : (
+                        <span className="text-indigo-600">
+                          All <strong>{items.length}</strong> products on this page are selected.
+                        </span>
+                      )}
+                      {selectAllPages ? (
+                        <button
+                          onClick={() => { setSelected(items.map(i => Number(i.id))); setSelectAllPages(false); }}
+                          className="text-xs font-bold text-indigo-700 underline underline-offset-2 hover:text-rose-600 transition-colors whitespace-nowrap"
+                        >
+                          Clear all-page selection
+                        </button>
+                      ) : (
+                        <button
+                          onClick={fetchAllIds}
+                          disabled={loadingAllIds}
+                          className="text-xs font-bold text-indigo-700 underline underline-offset-2 hover:text-indigo-900 transition-colors whitespace-nowrap disabled:opacity-50"
+                        >
+                          {loadingAllIds ? 'Selecting...' : `Select all ${total} products`}
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              )}
               <tr>
                 <th className="p-4 text-left w-10">
-                  <input type="checkbox" checked={selected.length === items.length && items.length > 0} onChange={toggleSelectAll} className="rounded w-4 h-4 accent-indigo-600" />
+                  <input type="checkbox" checked={isCurrentPageFullySelected} onChange={toggleSelectAll} className="rounded w-4 h-4 accent-indigo-600" />
                 </th>
                 <th className="p-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Supplier Name</th>
                 <th className="p-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Product Name</th>
@@ -422,9 +546,9 @@ export default function MasterSupplierProducts() {
             </thead>
             <tbody className="divide-y divide-slate-50">
               {items.map(item => (
-                <tr key={item.id} className={`hover:bg-slate-50/60 transition-colors ${selected.includes(item.id) ? 'bg-indigo-50/40' : ''}`}>
+                <tr key={item.id} className={`hover:bg-slate-50/60 transition-colors ${selected.includes(Number(item.id)) ? 'bg-indigo-50/40' : ''}`}>
                   <td className="p-4">
-                    <input type="checkbox" checked={selected.includes(item.id)} onChange={() => toggleSelect(item.id)} className="rounded w-4 h-4 accent-indigo-600" />
+                    <input type="checkbox" checked={selected.includes(Number(item.id))} onChange={() => toggleSelect(item.id)} className="rounded w-4 h-4 accent-indigo-600" />
                   </td>
                   <td className="p-4">
                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-semibold border border-indigo-100">
@@ -636,6 +760,45 @@ export default function MasterSupplierProducts() {
               <button onClick={() => setDeleteTarget(null)} className="flex-1 py-2.5 border border-slate-200 text-slate-600 rounded-xl text-sm font-semibold hover:bg-slate-50">Cancel</button>
               <button onClick={handleDelete} disabled={deleting} className="flex-1 py-2.5 bg-rose-500 hover:bg-rose-600 text-white rounded-xl text-sm font-semibold disabled:opacity-60">
                 {deleting ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* ─── Bulk Delete Confirm Modal ────────────────── */}
+      {showBulkDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl p-6 text-center">
+            <div className="w-14 h-14 bg-rose-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <svg className="w-7 h-7 text-rose-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+            </div>
+            <h3 className="text-lg font-bold text-slate-800 mb-1">Delete Selected Products?</h3>
+            <p className="text-sm text-slate-500 mb-1">
+              You are about to permanently delete
+            </p>
+            <p className="text-2xl font-bold text-rose-500 mb-1">{selectAllPages ? total : selected.length}</p>
+            <p className="text-sm text-slate-500 mb-5">
+              {selectAllPages ? 'products across all pages' : `selected product${selected.length !== 1 ? 's' : ''}`}.
+              <br /><span className="text-xs text-slate-400">This action cannot be undone.</span>
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowBulkDeleteConfirm(false)}
+                disabled={bulkDeleting}
+                className="flex-1 py-2.5 border border-slate-200 text-slate-600 rounded-xl text-sm font-semibold hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmBulkDelete}
+                disabled={bulkDeleting}
+                className="flex-1 py-2.5 bg-rose-500 hover:bg-rose-600 text-white rounded-xl text-sm font-semibold transition-colors disabled:opacity-60 flex items-center justify-center gap-2"
+              >
+                {bulkDeleting ? (
+                  <><svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg> Deleting...</>
+                ) : (
+                  `Delete ${selectAllPages ? total : selected.length}`
+                )}
               </button>
             </div>
           </div>
