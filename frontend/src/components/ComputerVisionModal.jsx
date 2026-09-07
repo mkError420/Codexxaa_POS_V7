@@ -29,6 +29,9 @@ export default function ComputerVisionModal({
   const liveIntervalRef = useRef(null);
   const ocrIntervalRef = useRef(null);
   const streamRef = useRef(null);
+  const analysisInFlightRef = useRef(false);
+  const detectedTextRef = useRef('');
+  const detectedBarcodeRef = useRef('');
 
   // CV & Engine State
   const [visionMode, setVisionMode] = useState('standard'); // 'standard' | 'canny' | 'contours' | 'hsv' | 'threshold' | 'keypoints'
@@ -200,19 +203,28 @@ export default function ComputerVisionModal({
 
   // 5. Deep Multi-Modal Analysis Function (Runs OCR + Barcode + Visual Features)
   const performDeepAnalysis = useCallback(async (sourceCanvasOrImage) => {
-    if (!sourceCanvasOrImage) return;
+    if (!sourceCanvasOrImage || analysisInFlightRef.current) return;
 
+    analysisInFlightRef.current = true;
     setIsOcrProcessing(true);
     try {
       const features = extractVisualFeatures(sourceCanvasOrImage);
       if (features) setCurrentFeatures(features);
 
-      const [text, barcode] = await Promise.all([
-        recognizeTextFromImage(sourceCanvasOrImage),
-        scanBarcodeNative(sourceCanvasOrImage)
-      ]);
+      // Barcode reads are cheap and deterministic. Only run OCR when no code was found.
+      const barcode = await scanBarcodeNative(sourceCanvasOrImage);
+      const normalizedBarcode = barcode.trim().toLowerCase();
+      const barcodeKnown = normalizedBarcode && [
+        ...activeInventory,
+        ...masterCatalogProducts
+      ].some(product => [product.sku, product.barcode]
+        .filter(Boolean)
+        .some(code => String(code).trim().toLowerCase() === normalizedBarcode));
+      const text = barcodeKnown ? '' : await recognizeTextFromImage(sourceCanvasOrImage);
 
       const cleanText = (text || '').trim();
+      detectedTextRef.current = cleanText;
+      detectedBarcodeRef.current = barcode || '';
       setDetectedText(cleanText);
       setDetectedBarcode(barcode || '');
 
@@ -256,6 +268,7 @@ export default function ComputerVisionModal({
       console.warn('Deep analysis error', e);
     } finally {
       setIsOcrProcessing(false);
+      analysisInFlightRef.current = false;
     }
   }, [activeInventory, masterCatalogProducts, trainedTemplates, autoAddEnabled, confidenceThreshold, mode, onSelectProduct, onAddToCart]);
 
@@ -271,8 +284,8 @@ export default function ComputerVisionModal({
       if (features) {
         setCurrentFeatures(features);
         const matches = matchProductComprehensive({
-          ocrText: detectedText,
-          barcode: detectedBarcode,
+          ocrText: detectedTextRef.current,
+          barcode: detectedBarcodeRef.current,
           features: features,
           inventoryProducts: activeInventory,
           masterCatalogProducts: masterCatalogProducts,
@@ -295,7 +308,7 @@ export default function ComputerVisionModal({
       if (liveIntervalRef.current) clearInterval(liveIntervalRef.current);
       if (ocrIntervalRef.current) clearInterval(ocrIntervalRef.current);
     };
-  }, [isOpen, isFrozen, detectedText, detectedBarcode, activeInventory, masterCatalogProducts, trainedTemplates, performDeepAnalysis, mode]);
+  }, [isOpen, isFrozen, activeInventory, masterCatalogProducts, trainedTemplates, performDeepAnalysis, mode]);
 
   // 7. Handle Adding Product to Cart (for POS Checkout)
   const handleAddProductToCart = (product, qty = 1, confidence = 0) => {

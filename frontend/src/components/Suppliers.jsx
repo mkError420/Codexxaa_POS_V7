@@ -3435,7 +3435,7 @@ export default function Suppliers() {
                                   </span>
                                 )}
                               </td>
-                              <td className="p-3 font-medium text-indigo-600">{log.change_reason}</td>
+                              <td className="p-3 font-medium text-indigo-600">{log.change_reason || log.reason || 'Price updated'}</td>
                             </tr>
                           );
                         })
@@ -5343,7 +5343,7 @@ export default function Suppliers() {
                                 </span>
                               )}
                             </td>
-                            <td className="p-4 font-medium text-indigo-600">{log.change_reason}</td>
+                            <td className="p-4 font-medium text-indigo-600">{log.change_reason || log.reason || 'Price updated'}</td>
                             <td className="p-4">
                               <div className="flex items-center space-x-2">
                                 <button

@@ -947,6 +947,23 @@ class SupplierController {
             $poStatus = $po['status'];
             $supplierChanged = ($oldSupplierId !== $supplierId);
 
+            // Snapshot existing product prices before the PO edit so audit logs
+            // can describe exactly what changed after the item sync completes.
+            $oldProductPrices = [];
+            $oldPriceStmt = DB::query(
+                'SELECT DISTINCT p.id, p.cost_price, p.price
+                 FROM purchase_order_items poi
+                 JOIN products p ON p.id = poi.product_id AND p.shop_id = ?
+                 WHERE poi.purchase_order_id = ? AND poi.shop_id = ?',
+                [$shopId, $poId, $shopId]
+            );
+            foreach ($oldPriceStmt->fetchAll() as $oldProduct) {
+                $oldProductPrices[(int)$oldProduct['id']] = [
+                    'cost_price' => (float)$oldProduct['cost_price'],
+                    'price' => (float)$oldProduct['price']
+                ];
+            }
+
             // Retrieve current PO info to get payment basis & paid amount fallback
             $poStmt = DB::query('SELECT payment_basis, paid_amount, due_amount FROM purchase_orders WHERE id = ? AND shop_id = ?', [$poId, $shopId]);
             $poInfo = $poStmt->fetch();
@@ -1162,6 +1179,34 @@ class SupplierController {
                         );
                     }
                 }
+            }
+
+            // Record edits made to Cost Price or Sale Price. This is intentionally
+            // after item synchronization so the log reflects the committed value.
+            foreach ($oldProductPrices as $productId => $oldPrices) {
+                $currentStmt = DB::query(
+                    'SELECT cost_price, price FROM products WHERE id = ? AND shop_id = ?',
+                    [$productId, $shopId]
+                );
+                $currentPrices = $currentStmt->fetch();
+                if (!$currentPrices) continue;
+
+                $newCost = (float)$currentPrices['cost_price'];
+                $newSale = (float)$currentPrices['price'];
+                $costChanged = abs($newCost - $oldPrices['cost_price']) > 0.00001;
+                $saleChanged = abs($newSale - $oldPrices['price']) > 0.00001;
+                if (!$costChanged && !$saleChanged) continue;
+
+                $reason = $costChanged && $saleChanged
+                    ? "Purchase Order #$poId updated (cost and sale price)"
+                    : ($costChanged
+                        ? "Purchase Order #$poId updated (cost price)"
+                        : "Purchase Order #$poId updated (sale price)");
+                DB::query(
+                    'INSERT INTO cost_price_logs (shop_id, product_id, supplier_id, old_cost_price, new_cost_price, reason)
+                     VALUES (?, ?, ?, ?, ?, ?)',
+                    [$shopId, $productId, $supplierId, $oldPrices['cost_price'], $newCost, $reason]
+                );
             }
 
             DB::commit();
@@ -1830,7 +1875,7 @@ class SupplierController {
 
             // Cost logs list
             $stmt = DB::query(
-                'SELECT cpl.*, p.name AS product_name, p.sku AS product_sku 
+                'SELECT cpl.*, cpl.reason AS change_reason, p.name AS product_name, p.sku AS product_sku 
                  FROM cost_price_logs cpl 
                  JOIN products p ON cpl.product_id = p.id 
                  WHERE cpl.supplier_id = ? AND cpl.shop_id = ? 

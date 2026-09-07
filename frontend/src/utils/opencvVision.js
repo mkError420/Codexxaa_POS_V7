@@ -1,3 +1,5 @@
+import API_BASE_URL from '../config';
+
 /**
  * OpenCV Computer Vision & Optical Recognition Engine
  * Provides:
@@ -73,6 +75,49 @@ export function playScanChime(type = 'success') {
 let tesseractWorker = null;
 let isTesseractLoading = false;
 let ocrWorkerQueue = Promise.resolve();
+let barcodeDetector = null;
+const TESSERACT_LANGUAGES = 'eng+ben';
+const TESSDATA_PATH = 'https://tessdata.projectnaptha.com/4.0.0';
+
+/** Crop the red scanner ROI (the same 64% center box drawn by renderVisionOverlay). */
+export function cropRedRoiToBase64(source, quality = 0.92) {
+  if (!source) return '';
+  const sourceWidth = source.videoWidth || source.naturalWidth || source.width || 0;
+  const sourceHeight = source.videoHeight || source.naturalHeight || source.height || 0;
+  if (!sourceWidth || !sourceHeight) return '';
+
+  const cropX = Math.floor(sourceWidth * 0.18);
+  const cropY = Math.floor(sourceHeight * 0.18);
+  const cropWidth = Math.max(1, Math.floor(sourceWidth * 0.64));
+  const cropHeight = Math.max(1, Math.floor(sourceHeight * 0.64));
+  const canvas = document.createElement('canvas');
+  canvas.width = cropWidth;
+  canvas.height = cropHeight;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  context.drawImage(source, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+  return canvas.toDataURL('image/jpeg', quality);
+}
+
+async function recognizeTextWithBackend(imageOrCanvas) {
+  try {
+    const image = cropRedRoiToBase64(imageOrCanvas);
+    if (!image) return '';
+    const token = localStorage.getItem('token');
+    const response = await fetch(`${API_BASE_URL}/ocr/scan`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({ image })
+    });
+    if (!response.ok) return '';
+    const result = await response.json();
+    return cleanOcrText(result.text || '');
+  } catch (error) {
+    return '';
+  }
+}
 
 export async function initTesseractOCR() {
   if (tesseractWorker) return tesseractWorker;
@@ -103,7 +148,11 @@ export async function initTesseractOCR() {
     }
 
     if (window.Tesseract) {
-      tesseractWorker = await window.Tesseract.createWorker('eng');
+      tesseractWorker = await window.Tesseract.createWorker(TESSERACT_LANGUAGES, 1, {
+        langPath: TESSDATA_PATH,
+        cachePath: 'tesseract-cache',
+        gzip: true
+      });
     }
   } catch (err) {
     console.warn('OCR Worker Init Warning:', err);
@@ -127,7 +176,7 @@ export function cleanOcrText(rawText = '') {
     .map(line => line.replace(/[~`_=<>|\\\/]/g, ' ').replace(/\s+/g, ' ').trim())
     .filter(line => {
       if (!line) return false;
-      const cleanLetters = line.replace(/[^a-zA-Z0-9]/g, '');
+      const cleanLetters = line.replace(/[^\p{L}\p{N}]/gu, '');
       if (cleanLetters.length < 2) return false;
       return true;
     });
@@ -147,6 +196,9 @@ export function cleanOcrText(rawText = '') {
  * contrast stretching to preserve crisp fine-print on medicine packaging.
  */
 export async function recognizeTextFromImage(imageOrCanvas) {
+  const serverText = await recognizeTextWithBackend(imageOrCanvas);
+  if (serverText) return serverText;
+
   // Chain through sequential worker queue to guarantee single-threaded safety
   const executeOcr = async () => {
     try {
@@ -170,7 +222,7 @@ export async function recognizeTextFromImage(imageOrCanvas) {
       const targetW = Math.max(480, Math.round(srcW * scale));
       const targetH = Math.max(360, Math.round(srcH * scale));
 
-      // Create high-contrast canvas
+      // Create a high-resolution grayscale canvas for package text.
       const srcCanvas = document.createElement('canvas');
       srcCanvas.width = targetW;
       srcCanvas.height = targetH;
@@ -210,9 +262,52 @@ export async function recognizeTextFromImage(imageOrCanvas) {
       }
       srcCtx.putImageData(srcImgData, 0, 0);
 
-      const ret = await worker.recognize(srcCanvas);
-      const rawText = ret?.data?.text || '';
-      return cleanOcrText(rawText);
+      await worker.setParameters({
+        tessedit_pageseg_mode: '11',
+        preserve_interword_spaces: '1',
+        user_defined_dpi: '300',
+        language_model_penalty_non_freq_dict_word: '0.1'
+      });
+
+      const firstResult = await worker.recognize(srcCanvas);
+      const firstText = cleanOcrText(firstResult?.data?.text || '');
+      const firstSignal = firstText.replace(/[^\p{L}\p{N}]/gu, '').length;
+      const firstConfidence = Number(firstResult?.data?.confidence || 0);
+
+      // Small labels often need a binary image and a tighter scan region.
+      if (firstSignal >= 12 && (!firstConfidence || firstConfidence >= 45)) return firstText;
+
+      const cropX = Math.round(targetW * 0.18);
+      const cropY = Math.round(targetH * 0.18);
+      const cropW = Math.max(320, Math.round(targetW * 0.64));
+      const cropH = Math.max(240, Math.round(targetH * 0.64));
+      const focusedCanvas = document.createElement('canvas');
+      focusedCanvas.width = cropW;
+      focusedCanvas.height = cropH;
+      const focusedCtx = focusedCanvas.getContext('2d', { willReadFrequently: true });
+      focusedCtx.drawImage(srcCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+      const focusedData = focusedCtx.getImageData(0, 0, cropW, cropH);
+      const pixels = focusedData.data;
+      for (let i = 0; i < pixels.length; i += 4) {
+        const value = pixels[i] > 145 ? 255 : 0;
+        pixels[i] = value;
+        pixels[i + 1] = value;
+        pixels[i + 2] = value;
+      }
+      focusedCtx.putImageData(focusedData, 0, 0);
+
+      await worker.setParameters({
+        tessedit_pageseg_mode: '6',
+        preserve_interword_spaces: '1',
+        user_defined_dpi: '300'
+      });
+      const retryResult = await worker.recognize(focusedCanvas);
+      const retryText = cleanOcrText(retryResult?.data?.text || '');
+      const retrySignal = retryText.replace(/[^\p{L}\p{N}]/gu, '').length;
+      const retryConfidence = Number(retryResult?.data?.confidence || 0);
+      if (retrySignal > firstSignal) return retryText;
+      if (retrySignal === firstSignal && retryConfidence > firstConfidence) return retryText;
+      return firstText;
     } catch (err) {
       console.warn('OCR recognition error:', err);
       return '';
@@ -230,9 +325,11 @@ export async function recognizeTextFromImage(imageOrCanvas) {
 export async function scanBarcodeNative(imageOrCanvas) {
   try {
     if ('BarcodeDetector' in window) {
-      const barcodeDetector = new window.BarcodeDetector({
-        formats: ['qr_code', 'ean_13', 'ean_8', 'code_128', 'code_39', 'upc_a', 'upc_e', 'data_matrix']
-      });
+      if (!barcodeDetector) {
+        barcodeDetector = new window.BarcodeDetector({
+          formats: ['qr_code', 'ean_13', 'ean_8', 'code_128', 'code_39', 'upc_a', 'upc_e', 'data_matrix']
+        });
+      }
       const barcodes = await barcodeDetector.detect(imageOrCanvas);
       if (barcodes && barcodes.length > 0) {
         return barcodes[0].rawValue || '';
@@ -1317,16 +1414,20 @@ export function matchProductComprehensive({
 
   // 3. OPTICAL CHARACTER RECOGNITION MATCHING AGAINST SUPER ADMIN CATALOG (PO Mode only)
   // In POS Checkout mode, we NEVER match external catalog items that do not exist in store inventory!
-  if (mode !== 'pos' && normalizedOcr.trim().length > 0 && masterCatalogProducts.length > 0) {
+  if (mode !== 'pos' && (normalizedOcr.trim().length > 0 || barcode) && masterCatalogProducts.length > 0) {
     for (const masterItem of masterCatalogProducts) {
       const mName = (masterItem.product_name || '').toLowerCase().trim();
       const mSupplier = (masterItem.supplier_name || '').toLowerCase().trim();
+      const mSku = String(masterItem.sku || masterItem.barcode || '').trim().toLowerCase();
       if (!mName) continue;
 
       let score = 0;
       let matchReason = '';
 
-      if (hasWordBoundary(normalizedOcr, mName)) {
+      if (barcode && mSku && mSku === barcode.trim().toLowerCase()) {
+        score = 100;
+        matchReason = `Catalog Barcode Match: ${masterItem.sku || masterItem.barcode}`;
+      } else if (hasWordBoundary(normalizedOcr, mName)) {
         score = 98;
         matchReason = `Catalog Match: "${masterItem.product_name}" (${masterItem.supplier_name || 'Verified Supplier'})`;
       } else {
@@ -1382,6 +1483,7 @@ export function matchProductComprehensive({
           price: existingLocal && parseFloat(existingLocal.price) > 0 ? parseFloat(existingLocal.price) : defaultPrice,
           cost_price: existingLocal && parseFloat(existingLocal.cost_price) > 0 ? parseFloat(existingLocal.cost_price) : defaultCost,
           sku: existingLocal ? existingLocal.sku : '',
+          barcode: masterItem.barcode || masterItem.sku || '',
           stock_quantity: existingLocal ? existingLocal.stock_quantity : 0,
           unit: (existingLocal && existingLocal.unit) || masterItem.unit || 'piece',
           unit_size: (existingLocal && existingLocal.unit_size) || masterItem.unit_size || '',

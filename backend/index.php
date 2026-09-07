@@ -79,6 +79,7 @@ require_once __DIR__ . '/controllers/InvestmentController.php';
 require_once __DIR__ . '/controllers/WebsiteContentController.php';
 require_once __DIR__ . '/controllers/BackupController.php';
 require_once __DIR__ . '/controllers/MasterSupplierProductController.php';
+require_once __DIR__ . '/controllers/OcrController.php';
 
 // Parse Request URI and Method
 $requestUri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
@@ -522,6 +523,8 @@ $routes = [
         // Auth
         '/^auth\/login$/' => function($args, $data) { AuthController::login($data); },
         '/^auth\/register-shop$/' => function($args, $data) { AuthController::registerShop($data); },
+        // Server-side ROI OCR
+        '/^ocr\/scan$/' => function($args, $data) { OcrController::scan($data); },
         // Products
         '/^products$/' => function($args, $data) { ProductController::createProduct($data); },
         '/^products\/bulk-delete$/' => function($args, $data) { ProductController::bulkDeleteProducts($data); },
