@@ -79,22 +79,85 @@ let barcodeDetector = null;
 const TESSERACT_LANGUAGES = 'eng+ben';
 const TESSDATA_PATH = 'https://tessdata.projectnaptha.com/4.0.0';
 
-/** Crop the red scanner ROI (the same 64% center box drawn by renderVisionOverlay). */
+/**
+ * Crop the Red ROI Bounding Box from the webcam/canvas source before sending
+ * to the PHP backend for Tesseract OCR processing.
+ *
+ * Strategy:
+ * 1. Prefer raw video dimensions (higher resolution than the display canvas).
+ * 2. Crop only the center 64% ROI — matching the red scanner box drawn by renderVisionOverlay.
+ * 3. Upscale the crop to at least MIN_OCR_WIDTH pixels wide so Tesseract receives
+ *    enough pixels to resolve fine medicine-label text.
+ * 4. Apply a single-pass unsharp-mask sharpening kernel to the cropped pixels
+ *    before JPEG encoding — reduces blur from camera lens or scaling.
+ */
+const MIN_OCR_WIDTH = 960; // minimum pixel width sent to Tesseract on the server
+
 export function cropRedRoiToBase64(source, quality = 0.92) {
   if (!source) return '';
-  const sourceWidth = source.videoWidth || source.naturalWidth || source.width || 0;
+
+  // Prefer native video/image dimensions over the (scaled-down) display canvas
+  const sourceWidth  = source.videoWidth  || source.naturalWidth  || source.width  || 0;
   const sourceHeight = source.videoHeight || source.naturalHeight || source.height || 0;
   if (!sourceWidth || !sourceHeight) return '';
 
-  const cropX = Math.floor(sourceWidth * 0.18);
-  const cropY = Math.floor(sourceHeight * 0.18);
-  const cropWidth = Math.max(1, Math.floor(sourceWidth * 0.64));
+  // ── 1. Compute ROI coordinates (18% inset on each side → 64% center region) ──
+  const cropX      = Math.floor(sourceWidth  * 0.18);
+  const cropY      = Math.floor(sourceHeight * 0.18);
+  const cropWidth  = Math.max(1, Math.floor(sourceWidth  * 0.64));
   const cropHeight = Math.max(1, Math.floor(sourceHeight * 0.64));
-  const canvas = document.createElement('canvas');
-  canvas.width = cropWidth;
-  canvas.height = cropHeight;
-  const context = canvas.getContext('2d', { willReadFrequently: true });
-  context.drawImage(source, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+
+  // ── 2. Upscale so the shorter axis is at least MIN_OCR_WIDTH ─────────────────
+  const scaleUp   = cropWidth < MIN_OCR_WIDTH ? MIN_OCR_WIDTH / cropWidth : 1;
+  const destWidth  = Math.round(cropWidth  * scaleUp);
+  const destHeight = Math.round(cropHeight * scaleUp);
+
+  const canvas  = document.createElement('canvas');
+  canvas.width  = destWidth;
+  canvas.height = destHeight;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+
+  // Draw the ROI region, upscaled into the destination canvas
+  ctx.drawImage(
+    source,
+    cropX, cropY, cropWidth, cropHeight,   // source rect
+    0,     0,     destWidth, destHeight     // destination rect
+  );
+
+  // ── 3. Unsharp-mask sharpening kernel (3×3 convolution) ──────────────────────
+  // Kernel:  [ 0 -1  0 ]
+  //          [-1  5 -1 ]
+  //          [ 0 -1  0 ]
+  // This enhances edges without amplifying color noise excessively.
+  try {
+    const imgData = ctx.getImageData(0, 0, destWidth, destHeight);
+    const src = imgData.data;
+    const dst = new Uint8ClampedArray(src.length);
+    const w = destWidth;
+    const h = destHeight;
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        for (let c = 0; c < 3; c++) {
+          // Fetch 4-neighbour pixels (clamp to edges)
+          const top    = ((Math.max(0,   y - 1)) * w + x) * 4 + c;
+          const bottom = ((Math.min(h-1, y + 1)) * w + x) * 4 + c;
+          const left   = (y * w + Math.max(0,   x - 1)) * 4 + c;
+          const right  = (y * w + Math.min(w-1, x + 1)) * 4 + c;
+          const sharp  = 5 * src[i + c] - src[top] - src[bottom] - src[left] - src[right];
+          dst[i + c]   = Math.max(0, Math.min(255, sharp));
+        }
+        dst[i + 3] = src[i + 3]; // preserve alpha
+      }
+    }
+    ctx.putImageData(new ImageData(dst, w, h), 0, 0);
+  } catch (_) {
+    // Sharpening is best-effort — proceed with unsharpened crop if it fails
+  }
+
   return canvas.toDataURL('image/jpeg', quality);
 }
 
@@ -113,6 +176,9 @@ async function recognizeTextWithBackend(imageOrCanvas) {
     });
     if (!response.ok) return '';
     const result = await response.json();
+    if (result.angle && result.angle !== 0) {
+      console.debug(`[OCR] Auto-rotated ${result.angle}° to extract valid text`);
+    }
     return cleanOcrText(result.text || '');
   } catch (error) {
     return '';
