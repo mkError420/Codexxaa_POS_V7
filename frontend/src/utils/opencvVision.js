@@ -76,7 +76,7 @@ let tesseractWorker = null;
 let isTesseractLoading = false;
 let ocrWorkerQueue = Promise.resolve();
 let barcodeDetector = null;
-const TESSERACT_LANGUAGES = 'eng+ben';
+const TESSERACT_LANGUAGES = 'eng';
 const TESSDATA_PATH = 'https://tessdata.projectnaptha.com/4.0.0';
 
 /**

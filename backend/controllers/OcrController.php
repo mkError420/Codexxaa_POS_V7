@@ -269,22 +269,34 @@ class OcrController {
         $isWindows   = strtoupper(substr(PHP_OS, 0, 3)) === 'WIN';
         $errorTarget = $isWindows ? 'NUL' : '/dev/null';
 
-        // PSM 6 – uniform block of text (best for product / medicine labels)
+        // PSM 7 – single text line (best for product labels like "Viodin 10%")
         $cmd  = escapeshellarg($binary)
             . ' ' . escapeshellarg($tmpFile)
-            . ' stdout -l eng+ben --psm 6 --oem 1 2>' . $errorTarget;
+            . ' stdout -l eng --psm 7 --oem 1 2>' . $errorTarget;
         $text = shell_exec($cmd);
         $text = is_string($text) ? trim(preg_replace('/\s+/u', ' ', $text)) : '';
 
-        // Fallback: PSM 11 – sparse text (better for single-line / rotated labels)
+        // Fallback 1: PSM 6 – uniform block of text (for multi-line labels)
         if (!self::isUsableText($text)) {
             $cmd2  = escapeshellarg($binary)
                 . ' ' . escapeshellarg($tmpFile)
-                . ' stdout -l eng+ben --psm 11 --oem 1 2>' . $errorTarget;
+                . ' stdout -l eng --psm 6 --oem 1 2>' . $errorTarget;
             $text2 = shell_exec($cmd2);
             $text2 = is_string($text2) ? trim(preg_replace('/\s+/u', ' ', $text2)) : '';
             if (self::isUsableText($text2)) {
                 $text = $text2;
+            }
+        }
+
+        // Fallback 2: PSM 13 – raw line (for very sparse or rotated text)
+        if (!self::isUsableText($text)) {
+            $cmd3  = escapeshellarg($binary)
+                . ' ' . escapeshellarg($tmpFile)
+                . ' stdout -l eng --psm 13 --oem 1 2>' . $errorTarget;
+            $text3 = shell_exec($cmd3);
+            $text3 = is_string($text3) ? trim(preg_replace('/\s+/u', ' ', $text3)) : '';
+            if (self::isUsableText($text3)) {
+                $text = $text3;
             }
         }
 
