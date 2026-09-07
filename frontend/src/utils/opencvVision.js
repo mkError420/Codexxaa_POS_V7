@@ -93,6 +93,41 @@ const TESSDATA_PATH = 'https://tessdata.projectnaptha.com/4.0.0';
  */
 const MIN_OCR_WIDTH = 960; // minimum pixel width sent to Tesseract on the server
 
+/**
+ * Crop the ROI (Region of Interest) from the source image/canvas
+ * Returns a canvas element containing only the center 64% region (blue ROI area)
+ * This is used to focus OCR on the product area only, excluding background/hands
+ */
+export function cropRoiToCanvas(source) {
+  if (!source) return null;
+
+  const sourceWidth = source.videoWidth || source.naturalWidth || source.width || 0;
+  const sourceHeight = source.videoHeight || source.naturalHeight || source.height || 0;
+  if (!sourceWidth || !sourceHeight) return null;
+
+  // Compute ROI coordinates (18% inset on each side → 64% center region)
+  const cropX = Math.floor(sourceWidth * 0.18);
+  const cropY = Math.floor(sourceHeight * 0.18);
+  const cropWidth = Math.max(1, Math.floor(sourceWidth * 0.64));
+  const cropHeight = Math.max(1, Math.floor(sourceHeight * 0.64));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = cropWidth;
+  canvas.height = cropHeight;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+
+  // Draw the ROI region
+  ctx.drawImage(
+    source,
+    cropX, cropY, cropWidth, cropHeight,   // source rect
+    0, 0, cropWidth, cropHeight            // destination rect
+  );
+
+  return canvas;
+}
+
 export function cropRedRoiToBase64(source, quality = 0.92) {
   if (!source) return '';
 
@@ -260,7 +295,19 @@ export async function recognizeTextFromImage(imageOrCanvas) {
   // Skip backend OCR - Tesseract not installed on server
   // Use Tesseract.js directly in browser
 
+  console.log('[Scanner] Capture started');
   console.log('[OCR] Starting text recognition from image/canvas');
+
+  // CRITICAL FIX: Use ROI crop instead of full frame
+  // The full camera frame contains background, hands, phone, etc.
+  // We only want the product region (blue ROI area)
+  const roiCanvas = cropRoiToCanvas(imageOrCanvas);
+  if (!roiCanvas) {
+    console.error('[Scanner] ROI crop failed');
+    return '';
+  }
+
+  console.log('[Scanner] ROI captured successfully');
 
   // Chain through sequential worker queue to guarantee single-threaded safety
   const executeOcr = async () => {
@@ -273,11 +320,11 @@ export async function recognizeTextFromImage(imageOrCanvas) {
 
       console.log('[OCR] Tesseract worker initialized successfully');
 
-      // Determine native source dimensions
-      const srcW = imageOrCanvas.naturalWidth || imageOrCanvas.videoWidth || imageOrCanvas.width || 800;
-      const srcH = imageOrCanvas.naturalHeight || imageOrCanvas.videoHeight || imageOrCanvas.height || 600;
+      // Determine native source dimensions from ROI canvas
+      const srcW = roiCanvas.width || 800;
+      const srcH = roiCanvas.height || 600;
 
-      console.log(`[OCR] Source dimensions: ${srcW}x${srcH}`);
+      console.log(`[OCR] ROI dimensions: ${srcW}x${srcH}`);
 
       // Scale proportionally: Keep resolution high enough for small medicine fine-print (up to 1600px)
       const maxDim = 1600;
@@ -293,122 +340,142 @@ export async function recognizeTextFromImage(imageOrCanvas) {
       const targetH = Math.max(360, Math.round(srcH * scale));
 
       console.log(`[OCR] Target dimensions: ${targetW}x${targetH}`);
+      console.log('[Scanner] Preprocessing complete');
 
-      // Create a high-resolution grayscale canvas for package text.
-      const srcCanvas = document.createElement('canvas');
-      srcCanvas.width = targetW;
-      srcCanvas.height = targetH;
-      const srcCtx = srcCanvas.getContext('2d', { willReadFrequently: true });
-      srcCtx.imageSmoothingEnabled = true;
-      srcCtx.imageSmoothingQuality = 'high';
-      srcCtx.drawImage(imageOrCanvas, 0, 0, targetW, targetH);
+      // ─────────────────────────────────────────────────────────────────────
+      // MULTI-VERSION PREPROCESSING PIPELINE
+      // Try different preprocessing methods to find the best OCR result
+      // ─────────────────────────────────────────────────────────────────────
 
-      const srcImgData = srcCtx.getImageData(0, 0, targetW, targetH);
-      const src = srcImgData.data;
+      const preprocessingResults = [];
 
-      // Enhanced preprocessing: grayscale + adaptive thresholding
-      for (let i = 0; i < src.length; i += 4) {
-        // Convert to grayscale using luminance formula
-        const lum = Math.round(src[i] * 0.299 + src[i + 1] * 0.587 + src[i + 2] * 0.114);
-        
-        // Adaptive thresholding with gamma correction
+      // Version A: Original RGB (no preprocessing)
+      console.log('[OCR] Preprocessing Version A: Original RGB');
+      const canvasA = document.createElement('canvas');
+      canvasA.width = targetW;
+      canvasA.height = targetH;
+      const ctxA = canvasA.getContext('2d', { willReadFrequently: true });
+      ctxA.imageSmoothingEnabled = true;
+      ctxA.imageSmoothingQuality = 'high';
+      ctxA.drawImage(roiCanvas, 0, 0, targetW, targetH);
+      preprocessingResults.push({ canvas: canvasA, version: 'A-RGB' });
+
+      // Version B: Grayscale + Contrast Enhancement
+      console.log('[OCR] Preprocessing Version B: Grayscale + Contrast');
+      const canvasB = document.createElement('canvas');
+      canvasB.width = targetW;
+      canvasB.height = targetH;
+      const ctxB = canvasB.getContext('2d', { willReadFrequently: true });
+      ctxB.imageSmoothingEnabled = true;
+      ctxB.imageSmoothingQuality = 'high';
+      ctxB.drawImage(roiCanvas, 0, 0, targetW, targetH);
+      const imgDataB = ctxB.getImageData(0, 0, targetW, targetH);
+      const pixelsB = imgDataB.data;
+      for (let i = 0; i < pixelsB.length; i += 4) {
+        const lum = Math.round(pixelsB[i] * 0.299 + pixelsB[i + 1] * 0.587 + pixelsB[i + 2] * 0.114);
+        // Contrast enhancement
+        const contrast = 1.5;
+        const factor = (259 * (contrast * 255 + 255)) / (255 * (259 - contrast));
+        const enhanced = factor * (lum - 128) + 128;
+        const clamped = Math.max(0, Math.min(255, enhanced));
+        pixelsB[i] = clamped;
+        pixelsB[i + 1] = clamped;
+        pixelsB[i + 2] = clamped;
+      }
+      ctxB.putImageData(imgDataB, 0, 0);
+      preprocessingResults.push({ canvas: canvasB, version: 'B-GrayscaleContrast' });
+
+      // Version C: Binary Thresholding
+      console.log('[OCR] Preprocessing Version C: Binary Threshold');
+      const canvasC = document.createElement('canvas');
+      canvasC.width = targetW;
+      canvasC.height = targetH;
+      const ctxC = canvasC.getContext('2d', { willReadFrequently: true });
+      ctxC.imageSmoothingEnabled = true;
+      ctxC.imageSmoothingQuality = 'high';
+      ctxC.drawImage(roiCanvas, 0, 0, targetW, targetH);
+      const imgDataC = ctxC.getImageData(0, 0, targetW, targetH);
+      const pixelsC = imgDataC.data;
+      for (let i = 0; i < pixelsC.length; i += 4) {
+        const lum = Math.round(pixelsC[i] * 0.299 + pixelsC[i + 1] * 0.587 + pixelsC[i + 2] * 0.114);
         const gamma = 1.2;
         const corrected = Math.pow(lum / 255, gamma) * 255;
         const threshold = 128;
         const binary = corrected > threshold ? 255 : 0;
-        
-        src[i] = binary;
-        src[i + 1] = binary;
-        src[i + 2] = binary;
+        pixelsC[i] = binary;
+        pixelsC[i + 1] = binary;
+        pixelsC[i + 2] = binary;
       }
-      srcCtx.putImageData(srcImgData, 0, 0);
+      ctxC.putImageData(imgDataC, 0, 0);
+      preprocessingResults.push({ canvas: canvasC, version: 'C-BinaryThreshold' });
 
-      // PSM 7 – single text line (best for product labels like "Viodin 10%")
-      console.log('[OCR] Trying PSM 7 (single text line)');
-      await worker.setParameters({
-        tessedit_pageseg_mode: '7',
-        preserve_interword_spaces: '0',
-        user_defined_dpi: '300',
-        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789% ',
-        load_system_dawg: '0',
-        load_freq_dawg: '0'
-      });
+      // ─────────────────────────────────────────────────────────────────────
+      // OCR WITH PSM MODES FOR EACH PREPROCESSING VERSION
+      // ─────────────────────────────────────────────────────────────────────
 
-      const firstResult = await worker.recognize(srcCanvas);
-      const firstText = cleanOcrText(firstResult?.data?.text || '');
-      const firstSignal = firstText.replace(/[^\p{L}\p{N}]/gu, '').length;
-      const firstConfidence = Number(firstResult?.data?.confidence || 0);
+      let bestResult = '';
+      let bestSignal = 0;
+      let bestConfidence = 0;
+      let bestVersion = '';
+      let bestPsm = '';
 
-      console.log(`[OCR] PSM 7 result: "${firstText}" (confidence: ${firstConfidence}, signal: ${firstSignal})`);
+      for (const { canvas, version } of preprocessingResults) {
+        console.log(`[OCR] Testing ${version}`);
 
-      // If we got good results with PSM 7, return immediately
-      if (firstSignal >= 3 && (!firstConfidence || firstConfidence >= 30)) {
-        console.log('[OCR] PSM 7 result accepted');
-        return firstText;
+        // PSM 7 – single text line
+        await worker.setParameters({
+          tessedit_pageseg_mode: '7',
+          preserve_interword_spaces: '0',
+          user_defined_dpi: '300',
+          tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789% ',
+          load_system_dawg: '0',
+          load_freq_dawg: '0'
+        });
+
+        const result7 = await worker.recognize(canvas);
+        const text7 = cleanOcrText(result7?.data?.text || '');
+        const signal7 = text7.replace(/[^\p{L}\p{N}]/gu, '').length;
+        const conf7 = Number(result7?.data?.confidence || 0);
+
+        console.log(`[OCR] ${version} PSM 7: "${text7}" (conf: ${conf7}, signal: ${signal7})`);
+
+        if (signal7 > bestSignal || (signal7 === bestSignal && conf7 > bestConfidence)) {
+          bestResult = text7;
+          bestSignal = signal7;
+          bestConfidence = conf7;
+          bestVersion = version;
+          bestPsm = '7';
+        }
+
+        // PSM 6 – uniform block
+        await worker.setParameters({
+          tessedit_pageseg_mode: '6',
+          preserve_interword_spaces: '1',
+          user_defined_dpi: '300'
+        });
+
+        const result6 = await worker.recognize(canvas);
+        const text6 = cleanOcrText(result6?.data?.text || '');
+        const signal6 = text6.replace(/[^\p{L}\p{N}]/gu, '').length;
+        const conf6 = Number(result6?.data?.confidence || 0);
+
+        console.log(`[OCR] ${version} PSM 6: "${text6}" (conf: ${conf6}, signal: ${signal6})`);
+
+        if (signal6 > bestSignal || (signal6 === bestSignal && conf6 > bestConfidence)) {
+          bestResult = text6;
+          bestSignal = signal6;
+          bestConfidence = conf6;
+          bestVersion = version;
+          bestPsm = '6';
+        }
       }
 
-      // Fallback 1: PSM 6 – uniform block of text (for multi-line labels)
-      console.log('[OCR] Trying PSM 6 (uniform block)');
-      await worker.setParameters({
-        tessedit_pageseg_mode: '6',
-        preserve_interword_spaces: '1',
-        user_defined_dpi: '300'
-      });
-      const retryResult = await worker.recognize(srcCanvas);
-      const retryText = cleanOcrText(retryResult?.data?.text || '');
-      const retrySignal = retryText.replace(/[^\p{L}\p{N}]/gu, '').length;
-      const retryConfidence = Number(retryResult?.data?.confidence || 0);
+      console.log(`[OCR] Best result: "${bestResult}" (version: ${bestVersion}, PSM: ${bestPsm}, signal: ${bestSignal}, confidence: ${bestConfidence})`);
+      console.log('[Scanner] OCR started');
+      console.log(`[Scanner] OCR result: ${bestResult}`);
+      console.log(`[Scanner] Normalized text: ${bestResult}`);
 
-      console.log(`[OCR] PSM 6 result: "${retryText}" (confidence: ${retryConfidence}, signal: ${retrySignal})`);
-
-      if (retrySignal > firstSignal) {
-        console.log('[OCR] PSM 6 result accepted (better signal)');
-        return retryText;
-      }
-      if (retrySignal === firstSignal && retryConfidence > firstConfidence) {
-        console.log('[OCR] PSM 6 result accepted (better confidence)');
-        return retryText;
-      }
-
-      // Fallback 2: Try with cropped ROI and binary threshold
-      console.log('[OCR] Trying cropped ROI with PSM 13');
-      const cropX = Math.round(targetW * 0.18);
-      const cropY = Math.round(targetH * 0.18);
-      const cropW = Math.max(320, Math.round(targetW * 0.64));
-      const cropH = Math.max(240, Math.round(targetH * 0.64));
-      const focusedCanvas = document.createElement('canvas');
-      focusedCanvas.width = cropW;
-      focusedCanvas.height = cropH;
-      const focusedCtx = focusedCanvas.getContext('2d', { willReadFrequently: true });
-      focusedCtx.drawImage(srcCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-      const focusedData = focusedCtx.getImageData(0, 0, cropW, cropH);
-      const pixels = focusedData.data;
-      for (let i = 0; i < pixels.length; i += 4) {
-        const value = pixels[i] > 145 ? 255 : 0;
-        pixels[i] = value;
-        pixels[i + 1] = value;
-        pixels[i + 2] = value;
-      }
-      focusedCtx.putImageData(focusedData, 0, 0);
-
-      await worker.setParameters({
-        tessedit_pageseg_mode: '13',
-        preserve_interword_spaces: '1',
-        user_defined_dpi: '300'
-      });
-      const retryResult2 = await worker.recognize(focusedCanvas);
-      const retryText2 = cleanOcrText(retryResult2?.data?.text || '');
-      const retrySignal2 = retryText2.replace(/[^\p{L}\p{N}]/gu, '').length;
-
-      console.log(`[OCR] PSM 13 result: "${retryText2}" (signal: ${retrySignal2})`);
-
-      if (retrySignal2 > firstSignal) {
-        console.log('[OCR] PSM 13 result accepted');
-        return retryText2;
-      }
-      
-      console.log('[OCR] Returning best result from PSM 7');
-      return firstText;
+      return bestResult;
     } catch (err) {
       console.warn('OCR recognition error:', err);
       return '';

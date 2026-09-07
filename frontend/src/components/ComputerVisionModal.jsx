@@ -11,6 +11,7 @@ import {
   deleteProductTemplate,
   playScanChime
 } from '../utils/opencvVision';
+import { matchProduct as matchProductFuzzy } from '../utils/fuzzyMatcher';
 
 export default function ComputerVisionModal({
   isOpen,
@@ -228,17 +229,60 @@ export default function ComputerVisionModal({
       setDetectedText(cleanText);
       setDetectedBarcode(barcode || '');
 
-      const matches = matchProductComprehensive({
-        ocrText: cleanText,
-        barcode: barcode || '',
-        features: features,
-        inventoryProducts: activeInventory,
-        masterCatalogProducts: masterCatalogProducts,
-        customTrained: trainedTemplates,
-        mode: mode
-      });
+      console.log('[Scanner] Inventory search started');
+
+      // Use fuzzy matching API for OCR text (primary method for product name recognition)
+      let matches = [];
+      if (cleanText.length >= 2) {
+        try {
+          // Get tenant ID from user object in localStorage
+          const userStr = localStorage.getItem('user');
+          const userObj = userStr ? JSON.parse(userStr) : {};
+          const tenantId = userObj.tenant_id || userObj.shop_id || 1;
+          console.log('[Scanner] Using tenant_id:', tenantId);
+          
+          const fuzzyMatches = await matchProductFuzzy(cleanText, tenantId);
+          
+          console.log('[Scanner] Fuzzy matches from API:', fuzzyMatches);
+          console.log('[Scanner] Number of fuzzy matches:', fuzzyMatches.length);
+          
+          if (fuzzyMatches.length > 0) {
+            console.log('[Scanner] Matching results:', fuzzyMatches);
+            // Convert fuzzy matches to matchCandidates format
+            matches = fuzzyMatches.map(m => ({
+              product: m,
+              confidence: m.confidence_score || 50,
+              matchType: 'fuzzy_ocr',
+              reason: `Fuzzy OCR Match (${Math.round(m.confidence_score || 0)}% similarity)`,
+              colorName: 'OCR',
+              icon: '📝'
+            }));
+            console.log('[Scanner] Converted matches:', matches);
+          } else {
+            console.log('[Scanner] No fuzzy matches found, will use fallback');
+          }
+        } catch (error) {
+          console.warn('[Scanner] Fuzzy matching failed, falling back to client-side matching:', error);
+        }
+      }
+
+      // Fallback to client-side matching if fuzzy matching returns no results
+      if (matches.length === 0) {
+        matches = matchProductComprehensive({
+          ocrText: cleanText,
+          barcode: barcode || '',
+          features: features,
+          inventoryProducts: activeInventory,
+          masterCatalogProducts: masterCatalogProducts,
+          customTrained: trainedTemplates,
+          mode: mode
+        });
+      }
 
       setMatchCandidates(matches);
+      console.log('[Scanner] Match candidates set:', matches);
+      console.log('[Scanner] Auto-add enabled:', autoAddEnabled);
+      console.log('[Scanner] Confidence threshold:', confidenceThreshold);
 
       // Auto-Add or Auto-Select logic
       if (autoAddEnabled && matches.length > 0) {
@@ -247,7 +291,13 @@ export default function ComputerVisionModal({
         const cooldown = 2000;
         const timeSince = now - lastAutoAddedTimeRef.current;
 
+        console.log('[Scanner] Top match:', top);
+        console.log('[Scanner] Top match confidence:', top.confidence);
+        console.log('[Scanner] Last auto-added ID:', lastAutoAddedIdRef.current);
+        console.log('[Scanner] Time since last add:', timeSince);
+
         if (top.confidence >= confidenceThreshold && (top.product.id !== lastAutoAddedIdRef.current || timeSince > cooldown)) {
+          console.log('[Scanner] Auto-add conditions met, adding product');
           if (mode === 'purchase_order' && onSelectProduct) {
             handleSelectProductForAction(top.product, top.confidence);
             lastAutoAddedIdRef.current = top.product.id;
@@ -255,14 +305,26 @@ export default function ComputerVisionModal({
           } else if (onAddToCart) {
             // In POS mode, only auto-add if item is actually in stock
             if (mode === 'pos' && (top.product.stock_quantity || 0) <= 0) {
+              console.log('[Scanner] Skipping out of stock item');
               // skip auto-adding out of stock item
             } else {
+              console.log('[Scanner] Adding to cart');
               handleAddProductToCart(top.product, 1, top.confidence);
               lastAutoAddedIdRef.current = top.product.id;
               lastAutoAddedTimeRef.current = now;
             }
           }
+        } else {
+          console.log('[Scanner] Auto-add conditions not met');
+          if (top.confidence < confidenceThreshold) {
+            console.log('[Scanner] Reason: Confidence too low');
+          }
+          if (top.product.id === lastAutoAddedIdRef.current && timeSince <= cooldown) {
+            console.log('[Scanner] Reason: Same product added recently (cooldown)');
+          }
         }
+      } else {
+        console.log('[Scanner] Auto-add not triggered:', autoAddEnabled ? 'no matches' : 'auto-add disabled');
       }
     } catch (e) {
       console.warn('Deep analysis error', e);
