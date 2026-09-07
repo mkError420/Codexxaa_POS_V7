@@ -2040,12 +2040,12 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 overflow-hidden min-h-0">
 
         {/* Left Side: Product Grid (2 columns on Desktop) */}
-        <div className="lg:col-span-5 flex flex-col overflow-hidden">
+        <div className="lg:col-span-7 flex flex-col overflow-hidden">
           {/* Search & Barcode Scan Console */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
-            {/* Search Input with Voice Button beside it */}
-            <div className="sm:col-span-2 flex items-center gap-2">
-              <div className="relative flex-1">
+          <div className="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-1 lg:grid-cols-1 gap-4 mb-4">
+            {/* Search Input */}
+            <div className="sm:col-span-2 md:col-span-1 lg:col-span-1">
+              <div className="relative">
                 <input
                   ref={searchInputRef}
                   type="text"
@@ -2103,8 +2103,50 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
                   </button>
                 )}
               </div>
+            </div>
 
-              {/* ── Voice Assistant Button Beside Search Options ── */}
+            {/* Barcode Scanner Console with Voice and Vision Options */}
+            <div className="sm:col-span-1 md:col-span-1 lg:col-span-1 flex items-center gap-2">
+              <div className="relative flex-1 flex items-center bg-slate-900 border border-slate-800 text-white rounded-xl shadow-sm px-3.5 py-3 overflow-hidden group">
+                {autoFocusBarcode && !receipt && !showHeldBillsModal && !showHoldBillModal && (
+                  <div className="laser-line animate-laser-scan"></div>
+                )}
+
+                <div className="flex items-center space-x-2.5 w-full z-10">
+                  {/* Barcode Icon */}
+                  <div className="relative flex-shrink-0 text-rose-500 group-hover:text-rose-400 animate-pulse">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 5v14M7 5v14M11 5v14M14 5v14M17 5v14M21 5v14" />
+                    </svg>
+                  </div>
+
+                  {/* Scanner Input */}
+                  <input
+                    ref={barcodeInputRef}
+                    type="text"
+                    placeholder="Scan barcode / SKU..."
+                    value={barcodeInput}
+                    onChange={(e) => setBarcodeInput(e.target.value)}
+                    onKeyDown={handleBarcodeKeydown}
+                    className="bg-transparent text-white placeholder-slate-500 border-none outline-none focus:ring-0 w-full text-xs font-semibold p-0"
+                  />
+
+                  {/* Auto-focus Status Indicator / Toggle */}
+                  <button
+                    type="button"
+                    onClick={() => setAutoFocusBarcode(!autoFocusBarcode)}
+                    className={`flex-shrink-0 text-[9px] font-extrabold px-2 py-1 rounded transition-all tracking-wider ${autoFocusBarcode
+                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                      : 'bg-slate-800 text-slate-400 border border-slate-700'
+                      }`}
+                    title={autoFocusBarcode ? "Click to switch to manual mode" : "Click to switch to auto-focus scanner mode"}
+                  >
+                    {autoFocusBarcode ? "AUTO" : "MANUAL"}
+                  </button>
+                </div>
+              </div>
+
+              {/* ── Voice Assistant Button ── */}
               {voiceSupported && (
                 <button
                   type="button"
@@ -2147,46 +2189,6 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
                 <span className="hidden sm:inline">Vision (Alt+C)</span>
                 <span className="sm:hidden">Vision</span>
               </button>
-            </div>
-
-            {/* Barcode Scanner Console */}
-            <div className="relative flex items-center bg-slate-900 border border-slate-800 text-white rounded-xl shadow-sm px-3.5 py-3 overflow-hidden group">
-              {autoFocusBarcode && !receipt && !showHeldBillsModal && !showHoldBillModal && (
-                <div className="laser-line animate-laser-scan"></div>
-              )}
-
-              <div className="flex items-center space-x-2.5 w-full z-10">
-                {/* Barcode Icon */}
-                <div className="relative flex-shrink-0 text-rose-500 group-hover:text-rose-400 animate-pulse">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 5v14M7 5v14M11 5v14M14 5v14M17 5v14M21 5v14" />
-                  </svg>
-                </div>
-
-                {/* Scanner Input */}
-                <input
-                  ref={barcodeInputRef}
-                  type="text"
-                  placeholder="Scan barcode / SKU..."
-                  value={barcodeInput}
-                  onChange={(e) => setBarcodeInput(e.target.value)}
-                  onKeyDown={handleBarcodeKeydown}
-                  className="bg-transparent text-white placeholder-slate-500 border-none outline-none focus:ring-0 w-full text-xs font-semibold p-0"
-                />
-
-                {/* Auto-focus Status Indicator / Toggle */}
-                <button
-                  type="button"
-                  onClick={() => setAutoFocusBarcode(!autoFocusBarcode)}
-                  className={`flex-shrink-0 text-[9px] font-extrabold px-2 py-1 rounded transition-all tracking-wider ${autoFocusBarcode
-                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
-                    : 'bg-slate-800 text-slate-400 border border-slate-700'
-                    }`}
-                  title={autoFocusBarcode ? "Click to switch to manual mode" : "Click to switch to auto-focus scanner mode"}
-                >
-                  {autoFocusBarcode ? "AUTO" : "MANUAL"}
-                </button>
-              </div>
             </div>
           </div>
 
@@ -2372,7 +2374,7 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
         </div>
 
         {/* Right Side / Cart Side Panel (Always visible on Desktop) */}
-        <div className={`hidden lg:flex lg:col-span-7 bg-white border border-slate-200 rounded-2xl flex-col overflow-hidden shadow-sm`}>
+        <div className={`hidden lg:flex lg:col-span-5 bg-white border border-slate-200 rounded-2xl flex-col overflow-hidden shadow-sm min-h-[calc(100vh-180px)]`}>
           {renderCartPanelContent()}
         </div>
 
@@ -3915,7 +3917,7 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
                 <thead>
                   <tr className="border-b border-slate-200 text-[10px] font-bold text-slate-400 uppercase bg-slate-50/50">
                     <th className="p-2 pl-3 w-[30%]">Item</th>
-                    <th className="p-2 text-center w-[28%]">Qty</th>
+                    <th className="p-2 text-center w-[20%]">Qty</th>
                     <th className="p-2 text-center w-[10%]">Unit</th>
                     <th className="p-2 text-right w-[16%]">Price</th>
                     <th className="p-2 text-right w-[14%]">Sub</th>
@@ -3950,7 +3952,7 @@ export default function Checkout({ onHeldBillsChange = () => { }, resumedHeldBil
                             value={item.quantity}
                             onChange={(e) => handleQuantityInput(item.id, e.target.value)}
                             onBlur={() => handleQuantityBlur(item.id, item.quantity)}
-                            className="w-10 text-center text-xs font-bold text-slate-700 bg-transparent border-0 focus:ring-0 focus:outline-none p-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            className="w-8 text-center text-xs font-bold text-slate-700 bg-transparent border-0 focus:ring-0 focus:outline-none p-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           />
                           <button
                             type="button"
