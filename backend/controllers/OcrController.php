@@ -214,21 +214,21 @@ class OcrController {
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
-     * Scale the image up using nearest-neighbour resampling if it is narrower
-     * than $minWidth pixels. Nearest-neighbour preserves hard binary edges.
+     * Scale the image up by 3x using imagecopyresampled for better OCR accuracy
      */
     private static function upscaleIfNeeded($img, $minWidth = 960) {
         $w = imagesx($img);
         $h = imagesy($img);
-        if ($w >= $minWidth) return $img;
-
-        $scale   = $minWidth / $w;
-        $newW    = (int)round($w * $scale);
-        $newH    = (int)round($h * $scale);
+        
+        // Always apply 3x upscaling for better OCR accuracy
+        $scale = 3;
+        $newW = (int)round($w * $scale);
+        $newH = (int)round($h * $scale);
+        
         $resized = imagecreatetruecolor($newW, $newH);
-        $white   = imagecolorallocate($resized, 255, 255, 255);
+        $white = imagecolorallocate($resized, 255, 255, 255);
         imagefill($resized, 0, 0, $white);
-        imagecopyresized($resized, $img, 0, 0, 0, 0, $newW, $newH, $w, $h);
+        imagecopyresampled($resized, $img, 0, 0, 0, 0, $newW, $newH, $w, $h);
         imagedestroy($img);
         return $resized;
     }
@@ -258,7 +258,7 @@ class OcrController {
 
     /**
      * Save $gdImage as a temporary PNG, call Tesseract, return raw text.
-     * Uses PSM 6 (uniform block) first; falls back to PSM 11 (sparse text).
+     * Uses PSM 6 (uniform block) with alphanumeric whitelist.
      */
     private static function extractText($gdImage, $workingDirectory) {
         $tmpFile = $workingDirectory . DIRECTORY_SEPARATOR
@@ -269,39 +269,43 @@ class OcrController {
         $isWindows   = strtoupper(substr(PHP_OS, 0, 3)) === 'WIN';
         $errorTarget = $isWindows ? 'NUL' : '/dev/null';
 
-        // PSM 7 – single text line (best for product labels like "Viodin 10%")
+        // PSM 6 – uniform block of text with alphanumeric whitelist
         $cmd  = escapeshellarg($binary)
             . ' ' . escapeshellarg($tmpFile)
-            . ' stdout -l eng --psm 7 --oem 1 2>' . $errorTarget;
+            . ' stdout -l eng --psm 6 --oem 1 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789% 2>' . $errorTarget;
         $text = shell_exec($cmd);
         $text = is_string($text) ? trim(preg_replace('/\s+/u', ' ', $text)) : '';
 
-        // Fallback 1: PSM 6 – uniform block of text (for multi-line labels)
-        if (!self::isUsableText($text)) {
-            $cmd2  = escapeshellarg($binary)
-                . ' ' . escapeshellarg($tmpFile)
-                . ' stdout -l eng --psm 6 --oem 1 2>' . $errorTarget;
-            $text2 = shell_exec($cmd2);
-            $text2 = is_string($text2) ? trim(preg_replace('/\s+/u', ' ', $text2)) : '';
-            if (self::isUsableText($text2)) {
-                $text = $text2;
-            }
-        }
-
-        // Fallback 2: PSM 13 – raw line (for very sparse or rotated text)
-        if (!self::isUsableText($text)) {
-            $cmd3  = escapeshellarg($binary)
-                . ' ' . escapeshellarg($tmpFile)
-                . ' stdout -l eng --psm 13 --oem 1 2>' . $errorTarget;
-            $text3 = shell_exec($cmd3);
-            $text3 = is_string($text3) ? trim(preg_replace('/\s+/u', ' ', $text3)) : '';
-            if (self::isUsableText($text3)) {
-                $text = $text3;
-            }
-        }
-
         @unlink($tmpFile);
-        return $text;
+        
+        // Clean OCR text: remove special characters, filter short words
+        $cleanText = self::cleanOcrText($text);
+        
+        return $cleanText;
+    }
+
+    /**
+     * Clean OCR text by removing special characters and filtering short words
+     * Example: "am mn fatisestic Sout Viodin" -> "fatisestic Sout Viodin"
+     */
+    private static function cleanOcrText($rawText) {
+        if (!is_string($rawText) || trim($rawText) === '') {
+            return $rawText;
+        }
+        
+        // 1. Keep only alphanumeric characters and spaces
+        $cleanText = preg_replace('/[^a-zA-Z0-9\s]/', '', $rawText);
+        
+        // 2. Split into words
+        $words = explode(' ', $cleanText);
+        
+        // 3. Filter out words with less than 3 characters
+        $validWords = array_filter($words, function($word) {
+            return strlen(trim($word)) >= 3;
+        });
+        
+        // 4. Rejoin valid words
+        return implode(' ', $validWords);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -311,15 +315,119 @@ class OcrController {
     /**
      * Returns true when $text contains enough real alphanumeric characters
      * to be considered valid OCR output (not empty or pure symbol garbage).
+     * Also validates for valid dictionary words (>= 4 alphabetic characters).
      */
     private static function isUsableText($text) {
         if (!is_string($text) || trim($text) === '') return false;
+        
+        // Check for at least 3 alphanumeric characters
         $signal = preg_replace('/[^\p{L}\p{N}]/u', '', $text);
         if (!is_string($signal) || mb_strlen($signal) < 3) return false;
+        
         // Garbage ratio guard: > 85% symbols -> likely OCR noise
         $total = mb_strlen($text);
         if ($total > 0 && (mb_strlen($signal) / $total) < 0.15) return false;
+        
+        // Regex validation: check for at least one word with >= 4 alphabetic characters
+        // This ensures we have a valid dictionary word or product name candidate
+        if (!preg_match('/[a-zA-Z]{4,}/', $text)) return false;
+        
         return true;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // MySQL fuzzy matching with levenshtein()
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Find matching product using MySQL LIKE and PHP levenshtein() fuzzy matching
+     */
+    private static function findMatchingProduct($searchText, $tenantId) {
+        if (empty($searchText)) {
+            return null;
+        }
+        
+        $db = Database::getInstance();
+        $conn = $db->getConnection();
+        
+        // First, try exact LIKE match for faster results
+        $likeQuery = "SELECT id, name, sku, barcode, price, stock_quantity, category, supplier_name, unit, unit_size 
+                      FROM products 
+                      WHERE tenant_id = ? 
+                      AND (name LIKE ? OR sku LIKE ? OR barcode LIKE ?)
+                      LIMIT 10";
+        
+        $searchPattern = '%' . addslashes($searchText) . '%';
+        $stmt = $conn->prepare($likeQuery);
+        $stmt->bind_param('isss', $tenantId, $searchPattern, $searchPattern, $searchPattern);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        
+        $candidates = [];
+        while ($row = $result->fetch_assoc()) {
+            $candidates[] = $row;
+        }
+        $stmt->close();
+        
+        // If we found exact matches, return the best one
+        if (!empty($candidates)) {
+            return $candidates[0];
+        }
+        
+        // If no exact match, perform fuzzy matching with levenshtein()
+        $fuzzyQuery = "SELECT id, name, sku, barcode, price, stock_quantity, category, supplier_name, unit, unit_size 
+                      FROM products 
+                      WHERE tenant_id = ?
+                      LIMIT 200";
+        
+        $stmt = $conn->prepare($fuzzyQuery);
+        $stmt->bind_param('i', $tenantId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        
+        $allProducts = [];
+        while ($row = $result->fetch_assoc()) {
+            $allProducts[] = $row;
+        }
+        $stmt->close();
+        
+        // Calculate levenshtein distance for each product name
+        $bestMatch = null;
+        $bestScore = 0;
+        $bestDistance = PHP_INT_MAX;
+        
+        foreach ($allProducts as $product) {
+            $productName = strtolower($product['name']);
+            $searchLower = strtolower($searchText);
+            
+            // Calculate levenshtein distance
+            $distance = levenshtein($productName, $searchLower);
+            
+            // Also check if search text is contained in product name (partial match bonus)
+            $contains = strpos($productName, $searchLower) !== false;
+            
+            // Calculate similarity score (0-100)
+            $maxLength = max(strlen($productName), strlen($searchLower));
+            $similarity = $maxLength > 0 ? (1 - $distance / $maxLength) * 100 : 0;
+            
+            // Adjust score: partial match gets 1.5x bonus
+            $adjustedScore = $contains ? $similarity * 1.5 : $similarity;
+            
+            if ($adjustedScore > $bestScore) {
+                $bestScore = $adjustedScore;
+                $bestDistance = $distance;
+                $bestMatch = $product;
+            }
+        }
+        
+        // Only return match if similarity is reasonable (> 25%)
+        if ($bestMatch && $bestScore > 25) {
+            $bestMatch['similarity_score'] = round($bestScore, 2);
+            $bestMatch['levenshtein_distance'] = $bestDistance;
+            return $bestMatch;
+        }
+        
+        return null;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -385,11 +493,16 @@ class OcrController {
 
         imagedestroy($processed);
 
+        // Find matching product using fuzzy matching
+        $tenantId = Auth::getTenantId();
+        $matchedProduct = self::findMatchingProduct($bestText, $tenantId);
+
         self::jsonResponse([
             'text'            => $bestText,
             'angle'           => $bestAngle,
             'engine'          => 'tesseract-gd',
             'rotations_tried' => $anglesClockwise,
+            'product'         => $matchedProduct,
         ]);
     }
 }

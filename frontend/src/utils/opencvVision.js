@@ -231,29 +231,24 @@ export async function initTesseractOCR() {
 
 /**
  * Clean and normalize OCR recognized text:
- * - Removes isolated symbols & gibberish
- * - Deduplicates identical consecutive or repeated lines
- * - Normalizes spacing
+ * - Removes special characters (keep only alphanumeric and spaces)
+ * - Filters out words with less than 3 characters
+ * - Example: "am mn fatisestic Sout Viodin" -> "fatisestic Sout Viodin"
  */
 export function cleanOcrText(rawText = '') {
   if (!rawText) return '';
-  const lines = rawText
-    .split(/\r?\n/)
-    .map(line => line.replace(/[~`_=<>|\\\/]/g, ' ').replace(/\s+/g, ' ').trim())
-    .filter(line => {
-      if (!line) return false;
-      const cleanLetters = line.replace(/[^\p{L}\p{N}]/gu, '');
-      if (cleanLetters.length < 2) return false;
-      return true;
-    });
-
-  const uniqueLines = [];
-  for (const l of lines) {
-    if (!uniqueLines.some(ul => ul.toLowerCase() === l.toLowerCase())) {
-      uniqueLines.push(l);
-    }
-  }
-  return uniqueLines.join('\n').trim();
+  
+  // 1. Keep only alphanumeric characters and spaces
+  const cleanText = rawText.replace(/[^a-zA-Z0-9\s]/g, '');
+  
+  // 2. Split into words
+  const words = cleanText.split(/\s+/);
+  
+  // 3. Filter out words with less than 3 characters
+  const validWords = words.filter(word => word.trim().length >= 3);
+  
+  // 4. Rejoin valid words
+  return validWords.join(' ').trim();
 }
 
 /**
@@ -262,18 +257,27 @@ export function cleanOcrText(rawText = '') {
  * contrast stretching to preserve crisp fine-print on medicine packaging.
  */
 export async function recognizeTextFromImage(imageOrCanvas) {
-  const serverText = await recognizeTextWithBackend(imageOrCanvas);
-  if (serverText) return serverText;
+  // Skip backend OCR - Tesseract not installed on server
+  // Use Tesseract.js directly in browser
+
+  console.log('[OCR] Starting text recognition from image/canvas');
 
   // Chain through sequential worker queue to guarantee single-threaded safety
   const executeOcr = async () => {
     try {
       const worker = await initTesseractOCR();
-      if (!worker) return '';
+      if (!worker) {
+        console.error('[OCR] Failed to initialize Tesseract worker');
+        return '';
+      }
+
+      console.log('[OCR] Tesseract worker initialized successfully');
 
       // Determine native source dimensions
       const srcW = imageOrCanvas.naturalWidth || imageOrCanvas.videoWidth || imageOrCanvas.width || 800;
       const srcH = imageOrCanvas.naturalHeight || imageOrCanvas.videoHeight || imageOrCanvas.height || 600;
+
+      console.log(`[OCR] Source dimensions: ${srcW}x${srcH}`);
 
       // Scale proportionally: Keep resolution high enough for small medicine fine-print (up to 1600px)
       const maxDim = 1600;
@@ -288,6 +292,8 @@ export async function recognizeTextFromImage(imageOrCanvas) {
       const targetW = Math.max(480, Math.round(srcW * scale));
       const targetH = Math.max(360, Math.round(srcH * scale));
 
+      console.log(`[OCR] Target dimensions: ${targetW}x${targetH}`);
+
       // Create a high-resolution grayscale canvas for package text.
       const srcCanvas = document.createElement('canvas');
       srcCanvas.width = targetW;
@@ -300,39 +306,32 @@ export async function recognizeTextFromImage(imageOrCanvas) {
       const srcImgData = srcCtx.getImageData(0, 0, targetW, targetH);
       const src = srcImgData.data;
 
-      // Compute luminance histogram for dynamic range contrast stretch
-      const hist = new Int32Array(256);
-      let totalSamples = 0;
-      for (let i = 0; i < src.length; i += 8) {
-        const lum = Math.round(src[i] * 0.299 + src[i + 1] * 0.587 + src[i + 2] * 0.114);
-        hist[lum]++;
-        totalSamples++;
-      }
-
-      const p1Cutoff = Math.floor(totalSamples * 0.01);
-      const p99Cutoff = Math.floor(totalSamples * 0.99);
-      let p1 = 0, acc = 0;
-      while (p1 < 255 && acc < p1Cutoff) { acc += hist[p1]; p1++; }
-      let p99 = 255; acc = 0;
-      while (p99 > 0 && acc < (totalSamples - p99Cutoff)) { acc += hist[p99]; p99--; }
-      if (p99 <= p1) { p1 = 0; p99 = 255; }
-      const range = Math.max(30, p99 - p1);
-
+      // Enhanced preprocessing: grayscale + adaptive thresholding
       for (let i = 0; i < src.length; i += 4) {
+        // Convert to grayscale using luminance formula
         const lum = Math.round(src[i] * 0.299 + src[i + 1] * 0.587 + src[i + 2] * 0.114);
-        const norm = Math.max(0, Math.min(1, (lum - p1) / range));
-        const val = Math.round(Math.pow(norm, 0.90) * 255);
-        src[i] = val;
-        src[i + 1] = val;
-        src[i + 2] = val;
+        
+        // Adaptive thresholding with gamma correction
+        const gamma = 1.2;
+        const corrected = Math.pow(lum / 255, gamma) * 255;
+        const threshold = 128;
+        const binary = corrected > threshold ? 255 : 0;
+        
+        src[i] = binary;
+        src[i + 1] = binary;
+        src[i + 2] = binary;
       }
       srcCtx.putImageData(srcImgData, 0, 0);
 
+      // PSM 7 – single text line (best for product labels like "Viodin 10%")
+      console.log('[OCR] Trying PSM 7 (single text line)');
       await worker.setParameters({
-        tessedit_pageseg_mode: '11',
-        preserve_interword_spaces: '1',
+        tessedit_pageseg_mode: '7',
+        preserve_interword_spaces: '0',
         user_defined_dpi: '300',
-        language_model_penalty_non_freq_dict_word: '0.1'
+        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789% ',
+        load_system_dawg: '0',
+        load_freq_dawg: '0'
       });
 
       const firstResult = await worker.recognize(srcCanvas);
@@ -340,9 +339,39 @@ export async function recognizeTextFromImage(imageOrCanvas) {
       const firstSignal = firstText.replace(/[^\p{L}\p{N}]/gu, '').length;
       const firstConfidence = Number(firstResult?.data?.confidence || 0);
 
-      // Small labels often need a binary image and a tighter scan region.
-      if (firstSignal >= 12 && (!firstConfidence || firstConfidence >= 45)) return firstText;
+      console.log(`[OCR] PSM 7 result: "${firstText}" (confidence: ${firstConfidence}, signal: ${firstSignal})`);
 
+      // If we got good results with PSM 7, return immediately
+      if (firstSignal >= 3 && (!firstConfidence || firstConfidence >= 30)) {
+        console.log('[OCR] PSM 7 result accepted');
+        return firstText;
+      }
+
+      // Fallback 1: PSM 6 – uniform block of text (for multi-line labels)
+      console.log('[OCR] Trying PSM 6 (uniform block)');
+      await worker.setParameters({
+        tessedit_pageseg_mode: '6',
+        preserve_interword_spaces: '1',
+        user_defined_dpi: '300'
+      });
+      const retryResult = await worker.recognize(srcCanvas);
+      const retryText = cleanOcrText(retryResult?.data?.text || '');
+      const retrySignal = retryText.replace(/[^\p{L}\p{N}]/gu, '').length;
+      const retryConfidence = Number(retryResult?.data?.confidence || 0);
+
+      console.log(`[OCR] PSM 6 result: "${retryText}" (confidence: ${retryConfidence}, signal: ${retrySignal})`);
+
+      if (retrySignal > firstSignal) {
+        console.log('[OCR] PSM 6 result accepted (better signal)');
+        return retryText;
+      }
+      if (retrySignal === firstSignal && retryConfidence > firstConfidence) {
+        console.log('[OCR] PSM 6 result accepted (better confidence)');
+        return retryText;
+      }
+
+      // Fallback 2: Try with cropped ROI and binary threshold
+      console.log('[OCR] Trying cropped ROI with PSM 13');
       const cropX = Math.round(targetW * 0.18);
       const cropY = Math.round(targetH * 0.18);
       const cropW = Math.max(320, Math.round(targetW * 0.64));
@@ -363,16 +392,22 @@ export async function recognizeTextFromImage(imageOrCanvas) {
       focusedCtx.putImageData(focusedData, 0, 0);
 
       await worker.setParameters({
-        tessedit_pageseg_mode: '6',
+        tessedit_pageseg_mode: '13',
         preserve_interword_spaces: '1',
         user_defined_dpi: '300'
       });
-      const retryResult = await worker.recognize(focusedCanvas);
-      const retryText = cleanOcrText(retryResult?.data?.text || '');
-      const retrySignal = retryText.replace(/[^\p{L}\p{N}]/gu, '').length;
-      const retryConfidence = Number(retryResult?.data?.confidence || 0);
-      if (retrySignal > firstSignal) return retryText;
-      if (retrySignal === firstSignal && retryConfidence > firstConfidence) return retryText;
+      const retryResult2 = await worker.recognize(focusedCanvas);
+      const retryText2 = cleanOcrText(retryResult2?.data?.text || '');
+      const retrySignal2 = retryText2.replace(/[^\p{L}\p{N}]/gu, '').length;
+
+      console.log(`[OCR] PSM 13 result: "${retryText2}" (signal: ${retrySignal2})`);
+
+      if (retrySignal2 > firstSignal) {
+        console.log('[OCR] PSM 13 result accepted');
+        return retryText2;
+      }
+      
+      console.log('[OCR] Returning best result from PSM 7');
       return firstText;
     } catch (err) {
       console.warn('OCR recognition error:', err);

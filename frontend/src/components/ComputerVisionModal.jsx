@@ -799,12 +799,22 @@ export default function ComputerVisionModal({
                     <button
                       type="button"
                       onClick={() => {
-                        // Prefer full-resolution video element for OCR when live streaming
-                        // (canvas is only 480x360 which gives poor OCR on small/fine text)
+                        // Clear cached states and take fresh snapshot from video stream
+                        detectedTextRef.current = '';
+                        detectedBarcodeRef.current = '';
+                        setDetectedText('');
+                        setDetectedBarcode('');
+                        
                         if (uploadedImageObj) {
                           performDeepAnalysis(uploadedImageObj);
                         } else if (!isFrozen && videoRef.current && videoRef.current.readyState >= 2 && videoRef.current.videoWidth > 0) {
-                          performDeepAnalysis(videoRef.current);
+                          // Create fresh canvas snapshot from video stream
+                          const freshCanvas = document.createElement('canvas');
+                          freshCanvas.width = videoRef.current.videoWidth;
+                          freshCanvas.height = videoRef.current.videoHeight;
+                          const freshCtx = freshCanvas.getContext('2d');
+                          freshCtx.drawImage(videoRef.current, 0, 0);
+                          performDeepAnalysis(freshCanvas);
                         } else if (canvasRef.current) {
                           performDeepAnalysis(canvasRef.current);
                         }
