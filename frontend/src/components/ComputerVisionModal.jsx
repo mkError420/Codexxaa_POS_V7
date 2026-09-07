@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import API_BASE_URL from '../config';
 import {
   renderVisionOverlay,
   extractVisualFeatures,
@@ -47,6 +48,18 @@ export default function ComputerVisionModal({
   const [confidenceThreshold] = useState(75);
   const [recentNotification, setRecentNotification] = useState(null);
 
+  // Uploaded Image & Interactive OCR refinement states
+  const [uploadedImageObj, setUploadedImageObj] = useState(null);
+  const [showFullOcr, setShowFullOcr] = useState(false);
+  const [isEditingOcr, setIsEditingOcr] = useState(false);
+  const [editedOcrText, setEditedOcrText] = useState('');
+
+  // Editable overrides for matched product in card
+  const [overrideProductName, setOverrideProductName] = useState('');
+  const [overrideSupplierName, setOverrideSupplierName] = useState('');
+  const [overrideCategory, setOverrideCategory] = useState('');
+  const [isEditingTopMatch, setIsEditingTopMatch] = useState(false);
+
   const lastAutoAddedIdRef = useRef(null);
   const lastAutoAddedTimeRef = useRef(0);
 
@@ -57,6 +70,33 @@ export default function ComputerVisionModal({
   const [trainCustomLabel, setTrainCustomLabel] = useState('');
   const [trainSnapshotData, setTrainSnapshotData] = useState(null);
   const [trainSearch, setTrainSearch] = useState('');
+
+  // Complete store inventory list for POS checkout scanning
+  const [allInventory, setAllInventory] = useState([]);
+
+  // Fetch complete store inventory catalog when modal opens in POS mode
+  useEffect(() => {
+    if (!isOpen || mode !== 'pos') return;
+    const fetchFullInventory = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        const res = await fetch(`${API_BASE_URL}/products?purchased_only=true&exclude_expired=true`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0) {
+            setAllInventory(data);
+          }
+        }
+      } catch (err) {
+        console.warn('Could not load full inventory for scanner', err);
+      }
+    };
+    fetchFullInventory();
+  }, [isOpen, mode]);
+
+  const activeInventory = (allInventory && allInventory.length > 0) ? allInventory : products;
 
   // 1. Initialize Cameras & Templates on Open
   useEffect(() => {
@@ -180,9 +220,10 @@ export default function ComputerVisionModal({
         ocrText: cleanText,
         barcode: barcode || '',
         features: features,
-        inventoryProducts: products,
+        inventoryProducts: activeInventory,
         masterCatalogProducts: masterCatalogProducts,
-        customTrained: trainedTemplates
+        customTrained: trainedTemplates,
+        mode: mode
       });
 
       setMatchCandidates(matches);
@@ -197,11 +238,18 @@ export default function ComputerVisionModal({
         if (top.confidence >= confidenceThreshold && (top.product.id !== lastAutoAddedIdRef.current || timeSince > cooldown)) {
           if (mode === 'purchase_order' && onSelectProduct) {
             handleSelectProductForAction(top.product, top.confidence);
+            lastAutoAddedIdRef.current = top.product.id;
+            lastAutoAddedTimeRef.current = now;
           } else if (onAddToCart) {
-            handleAddProductToCart(top.product, 1, top.confidence);
+            // In POS mode, only auto-add if item is actually in stock
+            if (mode === 'pos' && (top.product.stock_quantity || 0) <= 0) {
+              // skip auto-adding out of stock item
+            } else {
+              handleAddProductToCart(top.product, 1, top.confidence);
+              lastAutoAddedIdRef.current = top.product.id;
+              lastAutoAddedTimeRef.current = now;
+            }
           }
-          lastAutoAddedIdRef.current = top.product.id;
-          lastAutoAddedTimeRef.current = now;
         }
       }
     } catch (e) {
@@ -209,7 +257,7 @@ export default function ComputerVisionModal({
     } finally {
       setIsOcrProcessing(false);
     }
-  }, [products, masterCatalogProducts, trainedTemplates, autoAddEnabled, confidenceThreshold, mode, onSelectProduct, onAddToCart]);
+  }, [activeInventory, masterCatalogProducts, trainedTemplates, autoAddEnabled, confidenceThreshold, mode, onSelectProduct, onAddToCart]);
 
   // 6. Live Periodic Stream Analysis
   useEffect(() => {
@@ -226,9 +274,10 @@ export default function ComputerVisionModal({
           ocrText: detectedText,
           barcode: detectedBarcode,
           features: features,
-          inventoryProducts: products,
+          inventoryProducts: activeInventory,
           masterCatalogProducts: masterCatalogProducts,
-          customTrained: trainedTemplates
+          customTrained: trainedTemplates,
+          mode: mode
         });
         if (matches.length > 0) {
           setMatchCandidates(matches);
@@ -246,11 +295,21 @@ export default function ComputerVisionModal({
       if (liveIntervalRef.current) clearInterval(liveIntervalRef.current);
       if (ocrIntervalRef.current) clearInterval(ocrIntervalRef.current);
     };
-  }, [isOpen, isFrozen, detectedText, detectedBarcode, products, masterCatalogProducts, trainedTemplates, performDeepAnalysis]);
+  }, [isOpen, isFrozen, detectedText, detectedBarcode, activeInventory, masterCatalogProducts, trainedTemplates, performDeepAnalysis, mode]);
 
   // 7. Handle Adding Product to Cart (for POS Checkout)
   const handleAddProductToCart = (product, qty = 1, confidence = 0) => {
     if (!product || !onAddToCart) return;
+
+    if (mode === 'pos' && (product.stock_quantity || 0) <= 0) {
+      playScanChime('error');
+      setRecentNotification({
+        message: `"${product.name}" is currently Out of Stock!`,
+        type: 'error'
+      });
+      setTimeout(() => setRecentNotification(null), 3000);
+      return;
+    }
 
     onAddToCart(product, qty);
     playScanChime('success');
@@ -265,20 +324,43 @@ export default function ComputerVisionModal({
     }, 2500);
   };
 
-  // 8. Handle Selecting Product for Purchase Order Form
+  // 8. Handle Selecting Product for Purchase Order Form or POS Action
   const handleSelectProductForAction = (product, confidence = 0) => {
     if (!product) return;
 
+    if (mode === 'pos') {
+      if ((product.stock_quantity || 0) <= 0) {
+        playScanChime('error');
+        setRecentNotification({
+          message: `"${product.name}" is currently Out of Stock!`,
+          type: 'error'
+        });
+        setTimeout(() => setRecentNotification(null), 3000);
+        return;
+      }
+      handleAddProductToCart(product, selectedQuantity, confidence);
+      return;
+    }
+
     playScanChime('success');
 
+    const finalProduct = {
+      ...product,
+      name: overrideProductName ? overrideProductName.trim() : product.name,
+      supplier_name: overrideSupplierName ? overrideSupplierName.trim() : (product.supplier_name || ''),
+      category: overrideCategory ? overrideCategory.trim() : (product.category || 'Medicine'),
+      unit: product.unit || 'piece',
+      unit_size: product.unit_size || ''
+    };
+
     if (onSelectProduct) {
-      onSelectProduct(product, {
+      onSelectProduct(finalProduct, {
         detectedText,
         detectedBarcode,
         confidence: confidence || 95
       });
     } else if (onAddToCart) {
-      onAddToCart(product, selectedQuantity);
+      onAddToCart(finalProduct, selectedQuantity);
     }
 
     if (mode === 'purchase_order') {
@@ -286,13 +368,40 @@ export default function ComputerVisionModal({
     }
   };
 
+  // Re-match when user edits/refines OCR text manually
+  const handleReMatchWithCustomText = (text) => {
+    const cleanText = (text || '').trim();
+    setDetectedText(cleanText);
+    const matches = matchProductComprehensive({
+      ocrText: cleanText,
+      barcode: detectedBarcode || '',
+      features: currentFeatures,
+      inventoryProducts: activeInventory,
+      masterCatalogProducts: masterCatalogProducts,
+      customTrained: trainedTemplates,
+      mode: mode
+    });
+    setMatchCandidates(matches);
+    setIsEditingOcr(false);
+  };
+
   // 9. Toggle Freeze Frame
   const handleToggleFreeze = () => {
     setIsFrozen(prev => {
       const next = !prev;
       playScanChime('capture');
-      if (!prev && canvasRef.current) {
-        performDeepAnalysis(canvasRef.current);
+      if (!next) {
+        setUploadedImageObj(null);
+      }
+      if (!prev) {
+        // Prefer full-resolution video element for OCR (better than low-res canvas)
+        if (uploadedImageObj) {
+          performDeepAnalysis(uploadedImageObj);
+        } else if (videoRef.current && videoRef.current.readyState >= 2 && videoRef.current.videoWidth > 0) {
+          performDeepAnalysis(videoRef.current);
+        } else if (canvasRef.current) {
+          performDeepAnalysis(canvasRef.current);
+        }
       }
       return next;
     });
@@ -308,6 +417,11 @@ export default function ComputerVisionModal({
       const img = new Image();
       img.onload = () => {
         setIsFrozen(true);
+        setUploadedImageObj(img);
+        // Clear background video intervals so camera feed doesn't interfere
+        if (liveIntervalRef.current) clearInterval(liveIntervalRef.current);
+        if (ocrIntervalRef.current) clearInterval(ocrIntervalRef.current);
+
         const canvas = canvasRef.current;
         if (canvas) {
           // Adjust canvas internal dimensions to match uploaded image aspect ratio while keeping clean display
@@ -429,12 +543,12 @@ export default function ComputerVisionModal({
   const modalTitle = title || (
     mode === 'purchase_order'
       ? 'Vision Auto-Scan for Purchase Order'
-      : 'OpenCV & OCR Visual Scanner'
+      : 'OpenCV & OCR Visual Scanner (Inventory Catalog)'
   );
 
   const modalSubtitle = mode === 'purchase_order'
     ? 'Scan product or medicine box to auto-populate Company, Product Name, Category & Price'
-    : 'Recognizes medicines, packaged items, barcodes & produce';
+    : 'Scan product via camera or upload photo to match with store inventory catalog';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-slate-950/85 backdrop-blur-md animate-fadeIn">
@@ -453,7 +567,7 @@ export default function ComputerVisionModal({
               <div className="flex items-center gap-2">
                 <h3 className="text-base font-bold text-white tracking-tight">{modalTitle}</h3>
                 <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full border bg-emerald-500/20 text-emerald-400 border-emerald-500/40">
-                  {mode === 'purchase_order' ? 'PO Auto-Fill Active' : 'AI Multi-Modal Active'}
+                  {mode === 'purchase_order' ? 'PO Auto-Fill Active' : 'Inventory Catalog Scanner'}
                 </span>
               </div>
               <p className="text-xs text-slate-400">{modalSubtitle}</p>
@@ -671,7 +785,17 @@ export default function ComputerVisionModal({
                     {/* Scan Now Button */}
                     <button
                       type="button"
-                      onClick={() => canvasRef.current && performDeepAnalysis(canvasRef.current)}
+                      onClick={() => {
+                        // Prefer full-resolution video element for OCR when live streaming
+                        // (canvas is only 480x360 which gives poor OCR on small/fine text)
+                        if (uploadedImageObj) {
+                          performDeepAnalysis(uploadedImageObj);
+                        } else if (!isFrozen && videoRef.current && videoRef.current.readyState >= 2 && videoRef.current.videoWidth > 0) {
+                          performDeepAnalysis(videoRef.current);
+                        } else if (canvasRef.current) {
+                          performDeepAnalysis(canvasRef.current);
+                        }
+                      }}
                       disabled={isOcrProcessing}
                       className="px-3 py-1.5 rounded-xl bg-indigo-600/90 hover:bg-indigo-600 text-white font-semibold transition-all flex items-center space-x-1.5 shadow-sm disabled:opacity-50"
                     >
@@ -719,137 +843,293 @@ export default function ComputerVisionModal({
                   </label>
                 </div>
 
-                {/* OCR Detected Text Snippet Bar */}
+                {/* OCR Detected Text Display & Tools */}
                 {detectedText && (
-                  <div className="bg-slate-800/90 border border-indigo-500/40 rounded-2xl p-2.5 flex items-start space-x-2 text-xs animate-fadeIn">
-                    <span className="text-indigo-400 font-bold flex-shrink-0 text-[11px] uppercase tracking-wider">
-                      OCR Text:
-                    </span>
-                    <span className="text-slate-200 font-mono text-[11px] line-clamp-2">
-                      "{detectedText.replace(/\n+/g, ' ')}"
-                    </span>
+                  <div className="bg-slate-800/95 border border-indigo-500/40 rounded-2xl p-3 text-xs animate-fadeIn space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <span className="text-indigo-400 font-bold text-[11px] uppercase tracking-wider flex items-center gap-1">
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                          </svg>
+                          <span>OCR Extracted Text:</span>
+                        </span>
+                        <span className="text-[10px] text-slate-400 bg-slate-900 px-1.5 py-0.5 rounded font-mono">
+                          {detectedText.split('\n').filter(Boolean).length} lines
+                        </span>
+                      </div>
+
+                      <div className="flex items-center space-x-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditedOcrText(detectedText);
+                            setIsEditingOcr(!isEditingOcr);
+                          }}
+                          className="text-[10px] font-semibold px-2 py-0.5 rounded-lg bg-indigo-950 hover:bg-indigo-900 text-indigo-300 border border-indigo-700/60 transition-colors flex items-center space-x-1"
+                          title="Edit OCR text to refine matching"
+                        >
+                          <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                          </svg>
+                          <span>{isEditingOcr ? 'Close Edit' : 'Edit Text'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setShowFullOcr(!showFullOcr)}
+                          className="text-[10px] px-2 py-0.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
+                        >
+                          {showFullOcr ? 'Collapse' : 'Expand'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {isEditingOcr ? (
+                      <div className="space-y-2 pt-1">
+                        <textarea
+                          value={editedOcrText}
+                          onChange={(e) => setEditedOcrText(e.target.value)}
+                          rows={4}
+                          className="w-full bg-slate-900 text-slate-200 border border-indigo-500/70 rounded-xl p-2 font-mono text-[11px] outline-none focus:ring-1 focus:ring-indigo-500 leading-relaxed"
+                          placeholder="Refine medicine name or company text here..."
+                        />
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] text-slate-400">Fix any OCR typos and click Re-Match</span>
+                          <button
+                            type="button"
+                            onClick={() => handleReMatchWithCustomText(editedOcrText)}
+                            className="px-3 py-1 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white rounded-lg text-xs font-bold shadow flex items-center space-x-1.5"
+                          >
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
+                            <span>Re-Match Product & Company</span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className={`text-slate-200 font-mono text-[11px] leading-relaxed bg-slate-900/80 p-2 rounded-xl border border-slate-700/60 ${showFullOcr ? 'max-h-44 overflow-y-auto whitespace-pre-wrap' : 'line-clamp-2'}`}>
+                        "{detectedText}"
+                      </div>
+                    )}
                   </div>
                 )}
 
                 {/* Best Recognized Match Card */}
-                {topMatch ? (
-                  <div className="bg-gradient-to-b from-indigo-950/60 to-slate-900 border-2 border-indigo-500/80 rounded-2xl p-4 shadow-xl shadow-indigo-950/40 relative overflow-hidden animate-fadeIn">
-                    
-                    <div className="flex items-center justify-between mb-3">
-                      <span className="bg-indigo-500 text-white text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full tracking-wider flex items-center space-x-1">
-                        <span>{topMatch.icon || '🎯'}</span>
-                        <span>{mode === 'purchase_order' ? 'MATCHED PRODUCT & COMPANY' : 'BEST PRODUCT MATCH'}</span>
-                      </span>
+                {topMatch ? (() => {
+                  const effectiveName = overrideProductName || topMatch.product.name;
+                  const effectiveCompany = overrideSupplierName || topMatch.product.supplier_name || 'Generic / Unassigned';
+                  const effectiveCategory = overrideCategory || topMatch.product.category || 'Medicine';
+                  const candidateSuppliers = topMatch.product.candidate_suppliers || [];
 
-                      <div className="flex items-center space-x-1.5">
-                        <span className="text-xs text-slate-400 font-medium">Confidence:</span>
-                        <span className={`text-sm font-black font-mono px-2 py-0.5 rounded-lg border ${
-                          topMatch.confidence >= 80
-                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                            : topMatch.confidence >= 60
-                            ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-                            : 'bg-slate-700 text-slate-300 border-slate-600'
+                  return (
+                    <div className="bg-gradient-to-b from-indigo-950/70 to-slate-900 border-2 border-indigo-500/80 rounded-2xl p-4 shadow-xl shadow-indigo-950/40 relative overflow-hidden animate-fadeIn">
+                      
+                      <div className="flex items-center justify-between mb-3">
+                        <span className={`text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full tracking-wider flex items-center space-x-1 shadow ${
+                          topMatch.product.is_new
+                            ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white'
+                            : 'bg-indigo-600 text-white'
                         }`}>
-                          {topMatch.confidence}%
+                          <span>{topMatch.icon || '🎯'}</span>
+                          <span>
+                            {mode === 'purchase_order'
+                              ? (topMatch.product.is_new ? 'MATCHED PACKAGING (NEW ITEM)' : 'MATCHED PRODUCT & COMPANY')
+                              : 'BEST PRODUCT MATCH'}
+                          </span>
                         </span>
-                      </div>
-                    </div>
 
-                    <div className="space-y-2 mb-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <h3 className="text-base font-extrabold text-white leading-snug">
-                            {topMatch.product.name}
-                          </h3>
-                          <p className="text-xs text-indigo-300 mt-0.5">
-                            {topMatch.reason}
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <span className="text-xs text-slate-400 block font-medium">Price</span>
-                          <span className="text-xl font-black text-emerald-400">
-                            {currency}{parseFloat(topMatch.product.price || 0).toFixed(2)}
+                        <div className="flex items-center space-x-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setIsEditingTopMatch(!isEditingTopMatch)}
+                            className="text-[10px] font-semibold text-indigo-300 hover:text-white px-2 py-0.5 rounded-md bg-indigo-950/80 border border-indigo-700/50 hover:bg-indigo-900 transition-colors flex items-center space-x-1"
+                          >
+                            <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                            </svg>
+                            <span>{isEditingTopMatch ? 'Done Editing' : 'Edit Details'}</span>
+                          </button>
+
+                          <span className="text-xs text-slate-400 font-medium ml-1">Confidence:</span>
+                          <span className={`text-sm font-black font-mono px-2 py-0.5 rounded-lg border ${
+                            topMatch.confidence >= 80
+                              ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                              : topMatch.confidence >= 60
+                              ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                              : 'bg-slate-700 text-slate-300 border-slate-600'
+                          }`}>
+                            {topMatch.confidence}%
                           </span>
                         </div>
                       </div>
 
-                      {/* Product Details Grid (Company, Category, SKU) */}
-                      <div className="bg-slate-900/80 rounded-xl p-2.5 border border-slate-700/60 grid grid-cols-2 gap-2 text-[11px]">
-                        <div>
-                          <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">Company / Supplier:</span>
-                          <span className="font-semibold text-amber-300 truncate block">
-                            {topMatch.product.supplier_name || 'Generic / Unassigned'}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">Category:</span>
-                          <span className="font-semibold text-slate-200 truncate block">
-                            {topMatch.product.category || 'General / Medicine'}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">SKU Code:</span>
-                          <span className="font-mono text-slate-300">{topMatch.product.sku || 'N/A'}</span>
-                        </div>
-                        <div>
-                          <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">
-                            {(topMatch.product.unit || topMatch.product.unit_size) ? 'Unit & Pack Size:' : 'Stock Status:'}
-                          </span>
-                          {(topMatch.product.unit || topMatch.product.unit_size) ? (
-                            <span className="font-semibold text-emerald-300">
-                              {topMatch.product.unit || ''}{topMatch.product.unit && topMatch.product.unit_size ? ' • ' : ''}{topMatch.product.unit_size || ''}
+                      <div className="space-y-2 mb-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex-1">
+                            {isEditingTopMatch ? (
+                              <div className="space-y-1">
+                                <span className="text-[10px] text-slate-400 font-bold uppercase">Product Name:</span>
+                                <input
+                                  type="text"
+                                  value={effectiveName}
+                                  onChange={(e) => setOverrideProductName(e.target.value)}
+                                  className="w-full bg-slate-900 border border-indigo-500 text-white rounded-lg px-2.5 py-1 text-sm font-bold outline-none"
+                                />
+                              </div>
+                            ) : (
+                              <div>
+                                <h3 className="text-base font-extrabold text-white leading-snug">
+                                  {effectiveName}
+                                </h3>
+                                {topMatch.product.generic_name && (
+                                  <p className="text-[11px] text-indigo-300 font-medium mt-0.5">
+                                    Formula / Generic: <span className="text-white italic">{topMatch.product.generic_name}</span>
+                                  </p>
+                                )}
+                                <p className="text-[11px] text-indigo-200/80 mt-0.5">
+                                  {topMatch.reason}
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                          <div className="text-right flex-shrink-0">
+                            <span className="text-xs text-slate-400 block font-medium">Price</span>
+                            <span className="text-xl font-black text-emerald-400">
+                              {currency}{parseFloat(topMatch.product.price || 0).toFixed(2)}
                             </span>
-                          ) : (
-                            <span className={`font-semibold ${(topMatch.product.stock_quantity || 0) > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                              {(topMatch.product.stock_quantity || 0) > 0 ? `${topMatch.product.stock_quantity} available` : 'Out of stock'}
-                            </span>
-                          )}
+                          </div>
                         </div>
-                        {topMatch.product.expiry_date && (
-                          <div className="col-span-2 flex items-center justify-between border-t border-slate-800/80 pt-1 text-[10px]">
-                            <span className="text-slate-400 uppercase font-bold tracking-wider">Detected Expiry:</span>
-                            <span className="font-mono text-emerald-400 font-bold">{topMatch.product.expiry_date}</span>
+
+                        {/* Alternate Company Quick Selectors (e.g. Marketer vs Manufacturer) */}
+                        {candidateSuppliers.length > 1 && (
+                          <div className="bg-slate-900/60 p-2 rounded-xl border border-indigo-900/50 space-y-1">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                              Detected Companies on Packaging:
+                            </span>
+                            <div className="flex flex-wrap gap-1.5">
+                              {candidateSuppliers.map((cName, idx) => (
+                                <button
+                                  key={idx}
+                                  type="button"
+                                  onClick={() => setOverrideSupplierName(cName)}
+                                  className={`px-2 py-0.5 rounded-lg text-[10px] font-semibold border transition-all ${
+                                    effectiveCompany.toLowerCase() === cName.toLowerCase()
+                                      ? 'bg-amber-500/20 text-amber-300 border-amber-500 font-bold'
+                                      : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-slate-200'
+                                  }`}
+                                >
+                                  {idx === 0 ? 'Marketer: ' : 'Manufacturer: '}{cName}
+                                </button>
+                              ))}
+                            </div>
                           </div>
                         )}
+
+                        {/* Product Details Grid (Company, Category, SKU) */}
+                        <div className="bg-slate-900/80 rounded-xl p-2.5 border border-slate-700/60 grid grid-cols-2 gap-2 text-[11px]">
+                          <div>
+                            <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">Company / Supplier:</span>
+                            {isEditingTopMatch ? (
+                              <input
+                                type="text"
+                                value={effectiveCompany}
+                                onChange={(e) => setOverrideSupplierName(e.target.value)}
+                                className="w-full bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-xs text-amber-300 font-semibold mt-0.5 outline-none focus:border-indigo-500"
+                              />
+                            ) : (
+                              <span className="font-semibold text-amber-300 truncate block">
+                                {effectiveCompany}
+                              </span>
+                            )}
+                          </div>
+
+                          <div>
+                            <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">Category:</span>
+                            {isEditingTopMatch ? (
+                              <select
+                                value={effectiveCategory}
+                                onChange={(e) => setOverrideCategory(e.target.value)}
+                                className="w-full bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-xs text-slate-200 mt-0.5 outline-none focus:border-indigo-500"
+                              >
+                                {['Tablet', 'Capsule', 'Syrup', 'Suspension', 'Injection', 'Pediatric Drops', 'Inhaler', 'Ointment', 'Vitamin', 'Medicine'].map(cat => (
+                                  <option key={cat} value={cat}>{cat}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <span className="font-semibold text-slate-200 truncate block">
+                                {effectiveCategory}
+                              </span>
+                            )}
+                          </div>
+
+                          <div>
+                            <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">SKU / Batch Code:</span>
+                            <span className="font-mono text-slate-300">{topMatch.product.sku || 'Auto-assign on order'}</span>
+                          </div>
+
+                          <div>
+                            <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">
+                              {(topMatch.product.unit || topMatch.product.unit_size) ? 'Unit & Pack Size:' : 'Stock Status:'}
+                            </span>
+                            {(topMatch.product.unit || topMatch.product.unit_size) ? (
+                              <span className="font-semibold text-emerald-300">
+                                {topMatch.product.unit || 'piece'}{topMatch.product.unit_size ? ` • ${topMatch.product.unit_size}` : ''}
+                              </span>
+                            ) : (
+                              <span className={`font-semibold ${(topMatch.product.stock_quantity || 0) > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                {(topMatch.product.stock_quantity || 0) > 0 ? `${topMatch.product.stock_quantity} available` : 'New / Out of stock'}
+                              </span>
+                            )}
+                          </div>
+
+                          {topMatch.product.expiry_date && (
+                            <div className="col-span-2 flex items-center justify-between border-t border-slate-800/80 pt-1 text-[10px]">
+                              <span className="text-slate-400 uppercase font-bold tracking-wider">Detected Expiry:</span>
+                              <span className="font-mono text-emerald-400 font-bold">{topMatch.product.expiry_date}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center space-x-2 pt-2 border-t border-indigo-900/60">
+                        {mode !== 'purchase_order' && (
+                          <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl p-1 text-white">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedQuantity(Math.max(1, selectedQuantity - 1))}
+                              className="w-7 h-7 rounded-lg hover:bg-slate-800 flex items-center justify-center font-bold text-slate-400 hover:text-white"
+                            >
+                              -
+                            </button>
+                            <span className="w-8 text-center font-bold text-xs">{selectedQuantity}</span>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedQuantity(selectedQuantity + 1)}
+                              className="w-7 h-7 rounded-lg hover:bg-slate-800 flex items-center justify-center font-bold text-slate-400 hover:text-white"
+                            >
+                              +
+                            </button>
+                          </div>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => handleSelectProductForAction(topMatch.product, topMatch.confidence)}
+                          className="flex-1 py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white font-bold text-xs shadow-lg shadow-indigo-600/30 active:scale-98 transition-all flex items-center justify-center space-x-2"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                          </svg>
+                          <span>
+                            {mode === 'purchase_order' ? 'Auto-Fill Purchase Order (Enter)' : 'Add to Cart (Enter)'}
+                          </span>
+                        </button>
                       </div>
                     </div>
-
-                    <div className="flex items-center space-x-2 pt-2 border-t border-indigo-900/60">
-                      {mode !== 'purchase_order' && (
-                        <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl p-1 text-white">
-                          <button
-                            type="button"
-                            onClick={() => setSelectedQuantity(Math.max(1, selectedQuantity - 1))}
-                            className="w-7 h-7 rounded-lg hover:bg-slate-800 flex items-center justify-center font-bold text-slate-400 hover:text-white"
-                          >
-                            -
-                          </button>
-                          <span className="w-8 text-center font-bold text-xs">{selectedQuantity}</span>
-                          <button
-                            type="button"
-                            onClick={() => setSelectedQuantity(selectedQuantity + 1)}
-                            className="w-7 h-7 rounded-lg hover:bg-slate-800 flex items-center justify-center font-bold text-slate-400 hover:text-white"
-                          >
-                            +
-                          </button>
-                        </div>
-                      )}
-
-                      <button
-                        type="button"
-                        onClick={() => handleSelectProductForAction(topMatch.product, topMatch.confidence)}
-                        className="flex-1 py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white font-bold text-xs shadow-lg shadow-indigo-600/30 active:scale-98 transition-all flex items-center justify-center space-x-2"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
-                        </svg>
-                        <span>
-                          {mode === 'purchase_order' ? 'Auto-Fill Purchase Order (Enter)' : 'Add to Cart (Enter)'}
-                        </span>
-                      </button>
-                    </div>
-                  </div>
-                ) : (
+                  );
+                })() : (
                   <div className="bg-slate-800/40 border border-slate-700/60 rounded-2xl p-6 text-center text-slate-400">
                     <div className="w-12 h-12 rounded-2xl bg-slate-800 flex items-center justify-center mx-auto mb-2 text-indigo-400">
                       <svg className="w-6 h-6 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">

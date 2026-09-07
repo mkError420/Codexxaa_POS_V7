@@ -442,22 +442,24 @@ export default function Suppliers() {
     const trimmedName = poFormData.name.trim();
     const trimmedSku = poFormData.sku ? poFormData.sku.trim() : '';
 
-    // Check if matching product already exists in productsList (by SKU or ID/Name)
-    // When SKU is provided, match strictly by SKU so same-name products with different SKUs/expiry dates are distinct rows
+    // Check if matching product already exists in productsList (by SKU or Name + Expiry Date)
+    // 1. If admin explicitly filled up a SKU, match strictly by that SKU
+    // 2. If SKU is left blank, match by same Name AND same Expiry Date
+    const formExpiry = poFormData.expiry_date ? poFormData.expiry_date.split('T')[0].split(' ')[0].trim() : '';
     let matchedProduct = null;
     if (trimmedSku) {
       matchedProduct = productsList.find(p => p.sku && p.sku.trim().toLowerCase() === trimmedSku.toLowerCase());
-    } else if (poFormData.product_id && !poFormData.is_new) {
-      matchedProduct = productsList.find(p => String(p.id) === String(poFormData.product_id));
-    } else if (trimmedName && !poFormData.is_new) {
-      matchedProduct = productsList.find(p => p.name && p.name.trim().toLowerCase() === trimmedName.toLowerCase());
+    } else if (trimmedName) {
+      matchedProduct = productsList.find(p => {
+        const nameMatch = p.name && p.name.trim().toLowerCase() === trimmedName.toLowerCase();
+        if (!nameMatch) return false;
+        const prodExpiry = p.expiry_date ? p.expiry_date.split('T')[0].split(' ')[0].trim() : '';
+        return prodExpiry === formExpiry;
+      });
     }
 
-    // Auto-generate SKU only for new products, not when matching existing items or editing
-    let finalSku = trimmedSku || (matchedProduct ? matchedProduct.sku : '');
-    if (!finalSku && editingCartItemIndex === null) {
-      finalSku = 'SKU-' + trimmedName.substring(0, 3).toUpperCase().replace(/[^A-Z0-9]/g, 'X') + '-' + Math.floor(100 + Math.random() * 900);
-    }
+    // SKU remains blank if not entered and not matched to an existing product with same expiry date
+    let finalSku = trimmedSku || (matchedProduct ? (matchedProduct.sku || '') : '');
 
     const newItem = {
       product_id: matchedProduct ? matchedProduct.id : null,
@@ -468,7 +470,7 @@ export default function Suppliers() {
       cost_price: parseFloat(poFormData.cost_price),
       selling_price: parseFloat(poFormData.selling_price || (matchedProduct ? matchedProduct.price : 0) || 0),
       quantity_ordered: qty,
-      expiry_date: poFormData.expiry_date || null,
+      expiry_date: formExpiry || null,
       unit: poFormData.unit || (matchedProduct ? matchedProduct.unit : 'piece') || 'piece',
       unit_size: poFormData.unit_size || (matchedProduct ? (matchedProduct.unit_size || '') : '') || '',
       low_stock_threshold: parseInt(poFormData.low_stock_threshold || (matchedProduct ? matchedProduct.low_stock_threshold : 10) || 10)
@@ -1190,12 +1192,12 @@ export default function Suppliers() {
           product_id: productId,
           is_new: false,
           name: prod.name,
-          sku: prod.sku,
+          sku: '', // SKU is intentionally left blank until shop admin fills it up
           category: autoCategory,
           cost_price: prod.cost_price !== undefined && prod.cost_price !== null ? prod.cost_price : prev.cost_price,
           selling_price: prod.price,
           discount_percent: calculatedPct,
-          expiry_date: prod.expiry_date || '',
+          expiry_date: prod.expiry_date ? prod.expiry_date.split('T')[0] : '',
           unit: autoUnit,
           unit_size: autoUnitSize,
           low_stock_threshold: prod.low_stock_threshold || '10'
@@ -1245,8 +1247,29 @@ export default function Suppliers() {
   // Helper to extract known pharmaceutical/manufacturing company name from OCR text
   const findCompanyInText = (text = '') => {
     if (!text) return '';
-    const lower = text.toLowerCase();
+    const cleanText = text.replace(/\r/g, ' ');
+    const lower = cleanText.toLowerCase();
+
+    // 1. Dynamic regex for "Marketed by", "Manufactured by", "Mfg by", "Mfd by", "Packed by", "Distributed by"
+    const prefixPatterns = [
+      /(?:marketed\s*(?:in\s+[a-zA-Z\s]+)?by|marketed\s*by|marketer)[\s\:\-]+([a-zA-Z0-9\s\.\,\'\&\-]+?)(?:\,|\.|\n|copenhagen|denmark|germany|bangladesh|dhaka|india|usa|\d{4,}|$)/i,
+      /(?:manufactured\s*(?:in\s+[a-zA-Z\s]+)?by|mfg\.?\s*by|mfd\.?\s*by|produced\s*by|packed\s*by|imported\s*by)[\s\:\-]+([a-zA-Z0-9\s\.\,\'\&\-]+?)(?:\,|\.|\n|ennigerloh|germany|bangladesh|dhaka|india|usa|\d{4,}|$)/i
+    ];
+
+    for (const pat of prefixPatterns) {
+      const match = cleanText.match(pat);
+      if (match && match[1]) {
+        let clean = match[1].trim().replace(/^[\s\:\-\,\.]+|[\s\:\-\,\.]+$/g, '');
+        clean = clean.replace(/[\,\s]+(?:copenhagen|denmark|germany|ennigerloh|bangladesh|dhaka|india|usa|uk|london|france|switzerland|karachi|pakistan|japan|italy)[\s\S]*$/i, '').trim();
+        if (clean.length >= 3 && clean.length <= 60 && !/^(the|a|an|medicine|pack|box|tablets?|capsules?)$/i.test(clean)) {
+          return clean;
+        }
+      }
+    }
+
     const companyMappings = [
+      { key: 'lundbeck', name: 'H. Lundbeck A/S' },
+      { key: 'rottendorf', name: 'Rottendorf Pharma GmbH' },
       { key: 'beximco', name: 'Beximco Pharmaceuticals Ltd.' },
       { key: 'square', name: 'Square Pharmaceuticals PLC' },
       { key: 'incepta', name: 'Incepta Pharmaceuticals Ltd.' },
@@ -1261,6 +1284,13 @@ export default function Suppliers() {
       { key: 'drug international', name: 'Drug International Ltd.' },
       { key: 'ibn sina', name: 'The IBN SINA Pharmaceutical Industry PLC' },
       { key: 'popular', name: 'Popular Pharmaceuticals Ltd.' },
+      { key: 'radiant', name: 'Radiant Pharmaceuticals Ltd.' },
+      { key: 'beacon', name: 'Beacon Pharmaceuticals PLC' },
+      { key: 'novartis', name: 'Novartis AG' },
+      { key: 'pfizer', name: 'Pfizer Inc.' },
+      { key: 'gsk', name: 'GlaxoSmithKline PLC' },
+      { key: 'sanofi', name: 'Sanofi S.A.' },
+      { key: 'roche', name: 'F. Hoffmann-La Roche AG' },
       { key: 'unilever', name: 'Unilever Bangladesh' },
       { key: 'nestle', name: 'Nestle Bangladesh' },
       { key: 'pran', name: 'PRAN-RFL Group' }
@@ -1280,6 +1310,12 @@ export default function Suppliers() {
     // Also check current suppliers list
     const matchedFromSuppliers = suppliers.find(s => s.name && lower.includes(s.name.toLowerCase()));
     if (matchedFromSuppliers) return matchedFromSuppliers.name;
+
+    // Suffix matching for pharma corporate forms
+    const suffixMatch = cleanText.match(/\b([A-Z][a-zA-Z0-9\.\'\&\-\s]{2,35}?\s*(?:Pharma(?:ceuticals)?|Laboratories|Labs?|Healthcare|Therapeutics|PLC|Ltd|GmbH|A\/S|S\.A\.|Inc|Corp))\b/);
+    if (suffixMatch && suffixMatch[1] && !/^(?:prescription\s*only|keep\s*out|store\s*below|for\s*external)/i.test(suffixMatch[1].trim())) {
+      return suffixMatch[1].trim();
+    }
 
     return '';
   };
@@ -1360,7 +1396,7 @@ export default function Suppliers() {
       product_id: localProduct ? String(localProduct.id) : (matchedProduct.id ? String(matchedProduct.id) : ''),
       is_new: !localProduct && !matchedProduct.id,
       name: finalProductName,
-      sku: (localProduct && localProduct.sku) || matchedProduct.sku || scanMeta?.detectedBarcode || prev.sku || '',
+      sku: '', // SKU is left blank until shop admin fills it up
       category: finalCategory,
       cost_price: String(cp || ''),
       selling_price: String(sp || ''),
@@ -1436,6 +1472,7 @@ export default function Suppliers() {
         quantity_ordered: item.quantity_ordered,
         cost_price: item.cost_price,
         selling_price: item.selling_price || 0,
+        expiry_date: item.expiry_date ? item.expiry_date.split('T')[0] : '',
         unit: item.unit || item.product_unit || 'piece',
         unit_size: item.unit_size || ''
       })));
@@ -2563,19 +2600,25 @@ export default function Suppliers() {
             continue;
           }
 
-          // Check if product already exists in system (by SKU if provided, otherwise by Name)
+          // Check if product already exists in system (by SKU if provided, otherwise by Name AND Expiry Date)
           const trimmedProdName = productName.trim();
           const trimmedSkuVal = sku ? sku.trim() : '';
+          const trimmedCsvExpiry = expiryDate ? expiryDate.split('T')[0].split(' ')[0].trim() : '';
 
           let matchedProduct = null;
           if (trimmedSkuVal) {
             matchedProduct = productsList.find(p => p.sku && p.sku.trim().toLowerCase() === trimmedSkuVal.toLowerCase());
           } else if (trimmedProdName) {
-            matchedProduct = productsList.find(p => p.name && p.name.trim().toLowerCase() === trimmedProdName.toLowerCase());
+            matchedProduct = productsList.find(p => {
+              const nameMatch = p.name && p.name.trim().toLowerCase() === trimmedProdName.toLowerCase();
+              if (!nameMatch) return false;
+              const pExp = p.expiry_date ? p.expiry_date.split('T')[0].split(' ')[0].trim() : '';
+              return pExp === trimmedCsvExpiry;
+            });
           }
 
-          // Auto-generate SKU if not provided and not matched
-          const finalSku = trimmedSkuVal || (matchedProduct ? matchedProduct.sku : `SKU-${trimmedProdName.substring(0, 3).toUpperCase().replace(/[^A-Z0-9]/g, 'X')}-${Math.floor(100 + Math.random() * 900)}`);
+          // Auto-generate SKU only if not provided and not matched
+          const finalSku = trimmedSkuVal || (matchedProduct ? matchedProduct.sku : '');
 
           // Find supplier by name (more flexible matching)
           if (!supplierName || supplierName === '') {
