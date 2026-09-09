@@ -354,22 +354,44 @@ export default function MasterSupplierProducts() {
       const sup = supIdx >= 0 && cols[supIdx] !== undefined ? cols[supIdx] : '';
       const unit = unitIdx >= 0 && cols[unitIdx] !== undefined ? cols[unitIdx] : '';
       const unitSize = unitSizeIdx >= 0 && cols[unitSizeIdx] !== undefined ? cols[unitSizeIdx] : '';
-      const rawPrice = priceIdx >= 0 && cols[priceIdx] !== undefined ? cols[priceIdx].replace(/[^0-9.]/g, '') : '';
-      const price = rawPrice && !isNaN(rawPrice) ? parseFloat(rawPrice) : 0;
+      // Normalise price: strip currency symbols, handle comma-decimal (e.g. "25,50" → "25.50")
+      const rawPriceFull = priceIdx >= 0 && cols[priceIdx] !== undefined ? cols[priceIdx] : null;
+      let parsedPrice = undefined; // undefined = column absent → don't send to backend
+
+      if (rawPriceFull !== null) {
+        // Price column exists – parse it
+        let priceStr = rawPriceFull.replace(/[^0-9.,]/g, '');
+        // Comma as decimal separator (e.g. "250,50" with no dot) → convert to dot
+        if (priceStr.includes(',') && !priceStr.includes('.')) {
+          priceStr = priceStr.replace(',', '.');
+        } else {
+          // Comma as thousands separator (e.g. "1,250.00") → remove commas
+          priceStr = priceStr.replace(/,/g, '');
+        }
+        // Use .length check so '0' is treated as valid price (not falsy)
+        parsedPrice = priceStr.length > 0 && !isNaN(parseFloat(priceStr))
+          ? parseFloat(priceStr)
+          : 0; // blank/invalid cell → save as 0
+      }
 
       if (!prod || !sup) {
         errors.push(`Row ${i + 1}: product_name and supplier_name are required.`);
         continue;
       }
 
-      parsed.push({
+      const rowObj = {
         product_name: prod,
         category: cat,
         supplier_name: sup,
         unit: unit,
         unit_size: unitSize,
-        price: price
-      });
+      };
+      // Only include price key if the column existed in the CSV
+      // Backend uses array_key_exists('price') to decide whether to update on duplicate
+      if (parsedPrice !== undefined) {
+        rowObj.price = parsedPrice;
+      }
+      parsed.push(rowObj);
     }
 
     setCsvParsed(parsed);
@@ -548,7 +570,8 @@ export default function MasterSupplierProducts() {
 
       {/* Filters */}
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 mb-4 flex flex-col sm:flex-row gap-3">
-        <div className="flex-1 relative">
+        {/* Search — takes all remaining space; grows proportionally larger on md/lg */}
+        <div className="flex-1 md:flex-[2] lg:flex-[3] relative">
           <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-4.35-4.35M17 11A6 6 0 105 11a6 6 0 0012 0z" /></svg>
           <input
             type="text"
@@ -558,18 +581,20 @@ export default function MasterSupplierProducts() {
             className="w-full pl-9 pr-3 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-slate-50"
           />
         </div>
+        {/* Supplier filter — fixed width on md+ so it does not crowd the search */}
         <select
           value={supplierFilter}
           onChange={e => { setSupplierFilter(e.target.value); setPage(1); }}
-          className="border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-slate-50 min-w-[170px]"
+          className="flex-none border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-slate-50 w-full sm:w-[170px] md:w-[180px]"
         >
           <option value="">All Suppliers</option>
           {distinctSuppliers.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
+        {/* Category filter — fixed width on md+ so it does not crowd the search */}
         <select
           value={categoryFilter}
           onChange={e => { setCategoryFilter(e.target.value); setPage(1); }}
-          className="border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-slate-50 min-w-[170px]"
+          className="flex-none border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-slate-50 w-full sm:w-[170px] md:w-[180px]"
         >
           <option value="">All Categories</option>
           {distinctCategories.map(c => <option key={c} value={c}>{c}</option>)}
@@ -580,6 +605,7 @@ export default function MasterSupplierProducts() {
           </button>
         )}
       </div>
+
 
       {/* Table */}
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
@@ -600,7 +626,7 @@ export default function MasterSupplierProducts() {
               {/* Select-all-pages banner */}
               {isCurrentPageFullySelected && totalPages > 1 && (
                 <tr>
-                  <td colSpan={8} className="px-4 py-2.5 bg-indigo-50 border-b border-indigo-100">
+                  <td colSpan={9} className="px-4 py-2.5 bg-indigo-50 border-b border-indigo-100">
                     <div className="flex items-center justify-between gap-3 text-sm">
                       {selectAllPages ? (
                         <span className="text-indigo-700 font-semibold">
@@ -638,7 +664,8 @@ export default function MasterSupplierProducts() {
                 <th className="p-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Product Name</th>
                 <th className="p-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Category</th>
                 <th className="p-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Supplier Name</th>
-                <th className="p-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Unit & Size</th>
+                <th className="p-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Unit</th>
+                <th className="p-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Unit Size</th>
                 <th className="p-4 text-right text-xs font-bold text-slate-500 uppercase tracking-wider">Price</th>
                 <th className="p-4 text-left text-xs font-bold text-slate-500 uppercase tracking-wider">Added On</th>
                 <th className="p-4 text-center text-xs font-bold text-slate-500 uppercase tracking-wider">Actions</th>
@@ -665,10 +692,21 @@ export default function MasterSupplierProducts() {
                       🏢 {item.supplier_name}
                     </span>
                   </td>
+                  {/* Unit */}
                   <td className="p-4">
-                    {(item.unit || item.unit_size) ? (
+                    {item.unit ? (
                       <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-50 text-amber-800 rounded-lg text-xs font-semibold border border-amber-200">
-                        📦 {item.unit || ''}{item.unit && item.unit_size ? ' • ' : ''}{item.unit_size || ''}
+                        📦 {item.unit}
+                      </span>
+                    ) : (
+                      <span className="text-slate-300 text-xs italic">—</span>
+                    )}
+                  </td>
+                  {/* Unit Size */}
+                  <td className="p-4">
+                    {item.unit_size ? (
+                      <span className="inline-flex items-center px-2.5 py-1 bg-slate-100 text-slate-700 rounded-lg text-xs font-semibold border border-slate-200">
+                        {item.unit_size}
                       </span>
                     ) : (
                       <span className="text-slate-300 text-xs italic">—</span>

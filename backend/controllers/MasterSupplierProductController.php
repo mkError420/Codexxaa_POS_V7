@@ -303,24 +303,40 @@ class MasterSupplierProductController {
             $skippedCount = 0;
             $errors = [];
 
-            $insertStmt = $pdo->prepare("
-                INSERT INTO master_supplier_products (supplier_name, product_name, category, unit, unit_size, price) 
+            // Two prepared statements:
+            // 1. Price WAS in CSV   → INSERT with price, ON DUPLICATE UPDATE price
+            // 2. Price NOT in CSV   → INSERT with DEFAULT price, ON DUPLICATE keep existing price
+            $insertWithPrice = $pdo->prepare("
+                INSERT INTO master_supplier_products (supplier_name, product_name, category, unit, unit_size, price)
                 VALUES (?, ?, ?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE 
-                    category = CASE WHEN VALUES(category) IS NOT NULL AND VALUES(category) != '' THEN VALUES(category) ELSE category END,
-                    unit = CASE WHEN VALUES(unit) IS NOT NULL AND VALUES(unit) != '' THEN VALUES(unit) ELSE unit END,
+                ON DUPLICATE KEY UPDATE
+                    category  = CASE WHEN VALUES(category)  IS NOT NULL AND VALUES(category)  != '' THEN VALUES(category)  ELSE category  END,
+                    unit      = CASE WHEN VALUES(unit)      IS NOT NULL AND VALUES(unit)      != '' THEN VALUES(unit)      ELSE unit      END,
                     unit_size = CASE WHEN VALUES(unit_size) IS NOT NULL AND VALUES(unit_size) != '' THEN VALUES(unit_size) ELSE unit_size END,
-                    price = CASE WHEN VALUES(price) > 0 THEN VALUES(price) ELSE price END
+                    price     = VALUES(price)
+            ");
+
+            $insertNoPrice = $pdo->prepare("
+                INSERT INTO master_supplier_products (supplier_name, product_name, category, unit, unit_size)
+                VALUES (?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    category  = CASE WHEN VALUES(category)  IS NOT NULL AND VALUES(category)  != '' THEN VALUES(category)  ELSE category  END,
+                    unit      = CASE WHEN VALUES(unit)      IS NOT NULL AND VALUES(unit)      != '' THEN VALUES(unit)      ELSE unit      END,
+                    unit_size = CASE WHEN VALUES(unit_size) IS NOT NULL AND VALUES(unit_size) != '' THEN VALUES(unit_size) ELSE unit_size END
             ");
 
             foreach ($items as $idx => $item) {
-                // Support keys: product_name, category, supplier_name, unit, unit_size, price
-                $prod = trim($item['product_name'] ?? $item['name'] ?? $item['product'] ?? '');
-                $sup = trim($item['supplier_name'] ?? $item['supplier'] ?? '');
-                $cat = isset($item['category']) && trim($item['category']) !== '' ? trim($item['category']) : null;
-                $unit = isset($item['unit']) && trim($item['unit']) !== '' ? trim($item['unit']) : null;
+                $prod     = trim($item['product_name'] ?? $item['name'] ?? $item['product'] ?? '');
+                $sup      = trim($item['supplier_name'] ?? $item['supplier'] ?? '');
+                $cat      = isset($item['category'])  && trim($item['category'])  !== '' ? trim($item['category'])  : null;
+                $unit     = isset($item['unit'])      && trim($item['unit'])      !== '' ? trim($item['unit'])      : null;
                 $unitSize = isset($item['unit_size']) && trim($item['unit_size']) !== '' ? trim($item['unit_size']) : ($item['size'] ?? null);
-                $price = isset($item['price']) && is_numeric($item['price']) ? (float)$item['price'] : 0.00;
+
+                // array_key_exists distinguishes "key absent" from "key present but null/0"
+                $priceProvided = array_key_exists('price', $item)
+                              && $item['price'] !== null
+                              && is_numeric($item['price']);
+                $price = $priceProvided ? (float)$item['price'] : null;
 
                 if (empty($prod) || empty($sup)) {
                     $skippedCount++;
@@ -328,14 +344,20 @@ class MasterSupplierProductController {
                     continue;
                 }
 
-                $insertStmt->execute([$sup, $prod, $cat, $unit, $unitSize, $price]);
-                $affected = $insertStmt->rowCount();
+                if ($priceProvided) {
+                    $insertWithPrice->execute([$sup, $prod, $cat, $unit, $unitSize, $price]);
+                    $affected = $insertWithPrice->rowCount();
+                } else {
+                    $insertNoPrice->execute([$sup, $prod, $cat, $unit, $unitSize]);
+                    $affected = $insertNoPrice->rowCount();
+                }
+
                 if ($affected === 1) {
                     $insertedCount++;
-                } else if ($affected === 2) {
+                } elseif ($affected === 2) {
                     $updatedCount++;
                 } else {
-                    $skippedCount++; // Duplicate without change
+                    $skippedCount++; // duplicate with no actual change
                 }
             }
 
