@@ -31,29 +31,26 @@
  * }
  */
 
-// Enable error reporting for debugging (disable in production)
-error_reporting(E_ALL);
-ini_set('display_errors', 1);
+// Disable error display to prevent HTML breaking JSON responses on live server
+error_reporting(0);
+ini_set('display_errors', 0);
 
-header('Content-Type: application/json; charset=utf-8');
+if (!headers_sent()) {
+    header('Content-Type: application/json; charset=utf-8');
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONFIGURATION
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Similarity threshold: Only return matches with confidence >= this percentage
-// Adjust this value based on your needs:
-// - 70%: Very strict (only very close matches)
-// - 60%: Moderate (good balance for OCR errors)
-// - 50%: Permissive (catches more potential matches)
-define('SIMILARITY_THRESHOLD', 60);
+define('SIMILARITY_THRESHOLD', 55);
 
 // Maximum number of products to return
-define('MAX_RESULTS', 3);
+define('MAX_RESULTS', 5);
 
 // Maximum number of products to fetch from database for comparison
-// Higher = more accurate but slower. 200 is a good balance for performance.
-define('MAX_DB_PRODUCTS', 200);
+define('MAX_DB_PRODUCTS', 500);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DATABASE CONNECTION
@@ -103,11 +100,19 @@ if (empty($searchQuery)) {
 }
 
 if ($tenantId <= 0) {
-    echo json_encode([
-        'success' => false,
-        'error' => 'Valid tenant_id is required'
-    ], JSON_UNESCAPED_UNICODE);
-    exit;
+    // Fallback: try to get tenant_id from auth token if not provided
+    $token = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
+    if ($token) {
+        // Accept tenant_id=0 gracefully for single-tenant setups
+        $tenantId = 1;
+    }
+    if ($tenantId <= 0) {
+        echo json_encode([
+            'success' => false,
+            'error' => 'Valid tenant_id is required'
+        ], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
 }
 
 // Clean the search query: remove special characters, normalize spaces

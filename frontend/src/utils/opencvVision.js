@@ -279,8 +279,8 @@ export function cleanOcrText(rawText = '') {
   // 2. Split into words
   const words = cleanText.split(/\s+/);
   
-  // 3. Filter out words with less than 3 characters
-  const validWords = words.filter(word => word.trim().length >= 3);
+  // 3. Filter out single-character noise (keep 2+ chars so "10", "mg", "ml" survive)
+  const validWords = words.filter(word => word.trim().length >= 2);
   
   // 4. Rejoin valid words
   return validWords.join(' ').trim();
@@ -409,6 +409,67 @@ export async function recognizeTextFromImage(imageOrCanvas) {
       ctxC.putImageData(imgDataC, 0, 0);
       preprocessingResults.push({ canvas: canvasC, version: 'C-BinaryThreshold' });
 
+      // Version D: Adaptive Local Contrast Normalization + Double Unsharp-Mask
+      // Specifically designed for angled packaging, phone screens, and reflective surfaces
+      console.log('[OCR] Preprocessing Version D: Adaptive CLAHE + Sharpen');
+      const canvasD = document.createElement('canvas');
+      canvasD.width = targetW;
+      canvasD.height = targetH;
+      const ctxD = canvasD.getContext('2d', { willReadFrequently: true });
+      ctxD.drawImage(roiCanvas, 0, 0, targetW, targetH);
+      const imgDataD = ctxD.getImageData(0, 0, targetW, targetH);
+      const pixelsD = imgDataD.data;
+      const W = targetW;
+      const H = targetH;
+
+      // Step 1: Convert to grayscale using BT.601 perceptual weights
+      const gray = new Float32Array(W * H);
+      for (let i = 0; i < pixelsD.length; i += 4) {
+        gray[i >> 2] = pixelsD[i] * 0.299 + pixelsD[i + 1] * 0.587 + pixelsD[i + 2] * 0.114;
+      }
+
+      // Step 2: Compute local mean in 16x16 tiles (CLAHE approximation)
+      const tileSize = 16;
+      const normalized = new Float32Array(W * H);
+      for (let py = 0; py < H; py++) {
+        for (let px = 0; px < W; px++) {
+          const y0 = Math.max(0, py - tileSize);
+          const y1 = Math.min(H - 1, py + tileSize);
+          const x0 = Math.max(0, px - tileSize);
+          const x1 = Math.min(W - 1, px + tileSize);
+          let sum = 0, count = 0;
+          for (let ty = y0; ty <= y1; ty += 4) {
+            for (let tx = x0; tx <= x1; tx += 4) {
+              sum += gray[ty * W + tx];
+              count++;
+            }
+          }
+          const localMean = count > 0 ? sum / count : 128;
+          // Stretch contrast relative to local mean, clip at [0, 255]
+          normalized[py * W + px] = Math.max(0, Math.min(255, (gray[py * W + px] - localMean) * 1.8 + 128));
+        }
+      }
+
+      // Step 3: Apply unsharp mask for edge enhancement
+      for (let py = 1; py < H - 1; py++) {
+        for (let px = 1; px < W - 1; px++) {
+          const center = normalized[py * W + px];
+          const lap = (
+            normalized[(py - 1) * W + px] +
+            normalized[(py + 1) * W + px] +
+            normalized[py * W + (px - 1)] +
+            normalized[py * W + (px + 1)]
+          );
+          const sharp = Math.max(0, Math.min(255, 2.2 * center - 0.3 * lap));
+          const idx = (py * W + px) * 4;
+          pixelsD[idx]     = sharp;
+          pixelsD[idx + 1] = sharp;
+          pixelsD[idx + 2] = sharp;
+        }
+      }
+      ctxD.putImageData(imgDataD, 0, 0);
+      preprocessingResults.push({ canvas: canvasD, version: 'D-AdaptiveCLAHE' });
+
       // ─────────────────────────────────────────────────────────────────────
       // OCR WITH PSM MODES FOR EACH PREPROCESSING VERSION
       // ─────────────────────────────────────────────────────────────────────
@@ -419,61 +480,75 @@ export async function recognizeTextFromImage(imageOrCanvas) {
       let bestVersion = '';
       let bestPsm = '';
 
+      // Quality gate: reject results that are < 40% alphabetic characters
+      // e.g. "nd fo Co pt" has very low real-word density
+      const hasGoodAlphaRatio = (text) => {
+        if (!text || text.length < 3) return false;
+        const alphaCount = (text.match(/[a-zA-Z]/g) || []).length;
+        return (alphaCount / text.length) >= 0.4;
+      };
+
+      const psmModes = [
+        // PSM 11: Sparse text – best for packaging with text scattered across label
+        { psm: '11', preserveSpaces: '1', label: 'PSM11-Sparse' },
+        // PSM 6: Uniform block – good for single-product label faces
+        { psm: '6',  preserveSpaces: '1', label: 'PSM6-Block' },
+        // PSM 3: Fully automatic – let Tesseract decide page layout
+        { psm: '3',  preserveSpaces: '1', label: 'PSM3-Auto' },
+      ];
+
       for (const { canvas, version } of preprocessingResults) {
         console.log(`[OCR] Testing ${version}`);
 
-        // PSM 7 – single text line
-        await worker.setParameters({
-          tessedit_pageseg_mode: '7',
-          preserve_interword_spaces: '0',
-          user_defined_dpi: '300',
-          tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789% ',
-          load_system_dawg: '0',
-          load_freq_dawg: '0'
-        });
+        for (const { psm, preserveSpaces, label } of psmModes) {
+          // No whitelist – medicine/brand names contain letters not in simple AZ list
+          await worker.setParameters({
+            tessedit_pageseg_mode: psm,
+            preserve_interword_spaces: preserveSpaces,
+            user_defined_dpi: '300',
+            load_system_dawg: '0',
+            load_freq_dawg: '0'
+          });
 
-        const result7 = await worker.recognize(canvas);
-        const text7 = cleanOcrText(result7?.data?.text || '');
-        const signal7 = text7.replace(/[^\p{L}\p{N}]/gu, '').length;
-        const conf7 = Number(result7?.data?.confidence || 0);
+          const result = await worker.recognize(canvas);
+          const rawText = result?.data?.text || '';
+          const text = cleanOcrText(rawText);
+          const conf = Number(result?.data?.confidence || 0);
 
-        console.log(`[OCR] ${version} PSM 7: "${text7}" (conf: ${conf7}, signal: ${signal7})`);
+          // Signal = number of alphanumeric characters (more = better coverage of label)
+          const signal = text.replace(/[^\p{L}\p{N}]/gu, '').length;
 
-        if (signal7 > bestSignal || (signal7 === bestSignal && conf7 > bestConfidence)) {
-          bestResult = text7;
-          bestSignal = signal7;
-          bestConfidence = conf7;
-          bestVersion = version;
-          bestPsm = '7';
+          console.log(`[OCR] ${version} ${label}: "${text}" (conf: ${conf}, signal: ${signal})`);
+
+          // Only consider results that pass quality gate AND have meaningful content
+          if (hasGoodAlphaRatio(text) && text.length >= 3) {
+            if (signal > bestSignal || (signal === bestSignal && conf > bestConfidence)) {
+              bestResult = text;
+              bestSignal = signal;
+              bestConfidence = conf;
+              bestVersion = version;
+              bestPsm = label;
+            }
+          }
         }
+      }
 
-        // PSM 6 – uniform block
-        await worker.setParameters({
-          tessedit_pageseg_mode: '6',
-          preserve_interword_spaces: '1',
-          user_defined_dpi: '300'
-        });
-
-        const result6 = await worker.recognize(canvas);
-        const text6 = cleanOcrText(result6?.data?.text || '');
-        const signal6 = text6.replace(/[^\p{L}\p{N}]/gu, '').length;
-        const conf6 = Number(result6?.data?.confidence || 0);
-
-        console.log(`[OCR] ${version} PSM 6: "${text6}" (conf: ${conf6}, signal: ${signal6})`);
-
-        if (signal6 > bestSignal || (signal6 === bestSignal && conf6 > bestConfidence)) {
-          bestResult = text6;
-          bestSignal = signal6;
-          bestConfidence = conf6;
-          bestVersion = version;
-          bestPsm = '6';
+      // Last resort: if all results failed quality gate, use longest raw result
+      if (!bestResult) {
+        for (const { canvas, version } of preprocessingResults) {
+          await worker.setParameters({ tessedit_pageseg_mode: '6', user_defined_dpi: '300' });
+          const fallback = await worker.recognize(canvas);
+          const fallbackText = cleanOcrText(fallback?.data?.text || '');
+          if (fallbackText.length > bestResult.length) {
+            bestResult = fallbackText;
+            bestVersion = version + '-fallback';
+            bestPsm = 'PSM6-fallback';
+          }
         }
       }
 
       console.log(`[OCR] Best result: "${bestResult}" (version: ${bestVersion}, PSM: ${bestPsm}, signal: ${bestSignal}, confidence: ${bestConfidence})`);
-      console.log('[Scanner] OCR started');
       console.log(`[Scanner] OCR result: ${bestResult}`);
-      console.log(`[Scanner] Normalized text: ${bestResult}`);
 
       return bestResult;
     } catch (err) {

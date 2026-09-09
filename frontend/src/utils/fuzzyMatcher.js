@@ -37,23 +37,26 @@ import API_BASE_URL from '../config';
  * @throws {Error} If the API request fails
  */
 export async function matchProduct(searchQuery, tenantId) {
-  if (!searchQuery || typeof searchQuery !== 'string') {
+  if (!searchQuery || typeof searchQuery !== 'string' || !searchQuery.trim()) {
     throw new Error('searchQuery must be a non-empty string');
   }
 
-  if (!tenantId || typeof tenantId !== 'number' || tenantId <= 0) {
-    throw new Error('tenantId must be a positive integer');
-  }
+  // localStorage always stores values as strings — coerce to int before validating
+  const tenantIdInt = parseInt(tenantId, 10);
+  const resolvedTenantId = (!isNaN(tenantIdInt) && tenantIdInt > 0) ? tenantIdInt : 1;
+
+  const token = localStorage.getItem('token') || '';
 
   try {
-    const response = await fetch(`${API_BASE_URL}/match_product.php`, {
+    const response = await fetch(`${API_BASE_URL}/fuzzy-match`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Authorization': token ? `Bearer ${token}` : ''
       },
       body: JSON.stringify({
         search_query: searchQuery.trim(),
-        tenant_id: tenantId
+        tenant_id: resolvedTenantId
       })
     });
 

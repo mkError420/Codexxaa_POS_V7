@@ -299,9 +299,9 @@ class OcrController {
         // 2. Split into words
         $words = explode(' ', $cleanText);
         
-        // 3. Filter out words with less than 3 characters
+        // 3. Filter out single-character noise (keep 2+ chars so 10, mg, ml survive)
         $validWords = array_filter($words, function($word) {
-            return strlen(trim($word)) >= 3;
+            return strlen(trim($word)) >= 2;
         });
         
         // 4. Rejoin valid words

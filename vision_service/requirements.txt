@@ -1,0 +1,13 @@
+# Computer Vision & OCR
+opencv-python>=4.8.0
+numpy>=1.24.0
+pytesseract>=0.3.10
+# easyocr>=1.7.0  # Optional alternative: install torch and easyocr for deep-learning OCR
+
+# Fast Fuzzy String Matching (C++ backend, 10-50x faster than pure python fuzzywuzzy)
+rapidfuzz>=3.5.0
+
+# Optional Web Service / POS API integration
+fastapi>=0.104.0
+uvicorn>=0.24.0
+pydantic>=2.4.0

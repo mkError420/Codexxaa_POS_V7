@@ -525,6 +525,10 @@ $routes = [
         '/^auth\/register-shop$/' => function($args, $data) { AuthController::registerShop($data); },
         // Server-side ROI OCR
         '/^ocr\/scan$/' => function($args, $data) { OcrController::scan($data); },
+        // Fuzzy Product Match for Vision Scanner (used by ComputerVisionModal)
+        '/^fuzzy-match$/' => function($args, $data) {
+            require_once __DIR__ . '/match_product.php';
+        },
         // Products
         '/^products$/' => function($args, $data) { ProductController::createProduct($data); },
         '/^products\/bulk-delete$/' => function($args, $data) { ProductController::bulkDeleteProducts($data); },
